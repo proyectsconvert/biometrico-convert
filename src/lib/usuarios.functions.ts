@@ -472,3 +472,81 @@ export const vincularEmpleado = createServerFn({ method: "POST" })
     });
     return { empleado: empleado?.full_name ?? null };
   });
+
+/**
+ * Elimina un usuario por completo del sistema (auth, perfiles, roles y vínculos).
+ * Exclusivamente permitido para el rol super_admin.
+ */
+export const eliminarUsuario = createServerFn({ method: "POST" })
+  .middleware([requireSupabaseAuth])
+  .validator((d: unknown) => z.object({ id: z.string().uuid() }).parse(d))
+  .handler(async ({ data, context }) => {
+    // 1. Validar que quien ejecuta es super administrador
+    const { data: esSuper } = await context.supabase.rpc("is_super_admin", { _user_id: context.userId });
+    if (!esSuper) {
+      throw new Error("Solo un Super Administrador puede eliminar usuarios.");
+    }
+
+    // 2. Prevenir auto-eliminación
+    if (data.id === context.userId) {
+      throw new Error("No puedes eliminar tu propio usuario.");
+    }
+
+    const { supabaseAdmin } = await import("@/integrations/supabase/client.server");
+
+    // 3. Obtener datos del perfil antes de eliminar para el registro de auditoría
+    const { data: perfil } = await supabaseAdmin
+      .from("profiles")
+      .select("id, full_name, email, tenant_id")
+      .eq("id", data.id)
+      .maybeSingle();
+
+    if (!perfil) {
+      throw new Error("El usuario no existe o ya fue eliminado.");
+    }
+
+    // 4. Desvincular de cualquier empleado asociado
+    await supabaseAdmin
+      .from("employees")
+      .update({ user_id: null })
+      .eq("user_id", data.id);
+
+    // 5. Eliminar asignaciones de campañas responsables
+    await supabaseAdmin
+      .from("campaign_responsibles")
+      .delete()
+      .eq("user_id", data.id);
+
+    // 6. Eliminar roles asignados
+    await supabaseAdmin
+      .from("user_roles")
+      .delete()
+      .eq("user_id", data.id);
+
+    // 7. Eliminar perfil de la tabla profiles
+    await supabaseAdmin
+      .from("profiles")
+      .delete()
+      .eq("id", data.id);
+
+    // 8. Eliminar de Supabase Auth
+    const { error: authErr } = await supabaseAdmin.auth.admin.deleteUser(data.id);
+    if (authErr) {
+      console.warn("Aviso al eliminar en auth:", authErr.message);
+    }
+
+    // 9. Registrar en audit_logs
+    const tenantId = perfil.tenant_id ?? (await context.supabase.rpc("current_tenant_id")).data;
+    await supabaseAdmin.from("audit_logs").insert({
+      tenant_id: tenantId,
+      user_id: context.userId,
+      module: "usuarios",
+      action: "eliminar",
+      record_id: data.id,
+      old_value: { full_name: perfil.full_name, email: perfil.email },
+      reason: "Usuario eliminado por super administrador",
+    });
+
+    return { ok: true, id: data.id, email: perfil.email };
+  });
+

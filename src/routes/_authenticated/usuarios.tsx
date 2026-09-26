@@ -6,7 +6,7 @@ import { Eye, EyeOff, KeyRound, Loader2, Settings2, ShieldPlus, Trash2, UserCog,
 import { toast } from "sonner";
 import { supabase } from "@/integrations/supabase/client";
 import { useAccess } from "@/lib/session";
-import { accesosUsuarios, actualizarUsuario, cambiarContrasena, vincularEmpleado } from "@/lib/usuarios.functions";
+import { accesosUsuarios, actualizarUsuario, cambiarContrasena, eliminarUsuario, vincularEmpleado } from "@/lib/usuarios.functions";
 import { PageHeader } from "@/components/app-shell";
 import { Paginador, SimpleTable, ordenarFilas, usePaginado, type Orden } from "@/components/simple-table";
 import { CrearUsuarios } from "@/components/crear-usuarios";
@@ -19,6 +19,16 @@ import { Switch } from "@/components/ui/switch";
 import { Sheet, SheetContent, SheetDescription, SheetHeader, SheetTitle } from "@/components/ui/sheet";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from "@/components/ui/alert-dialog";
 import { cn } from "@/lib/utils";
 
 export const Route = createFileRoute("/_authenticated/usuarios")({
@@ -61,7 +71,9 @@ function Usuarios() {
   const acceso = useAccess();
   const qc = useQueryClient();
   const leerAccesos = useServerFn(accesosUsuarios);
+  const ejecutarEliminar = useServerFn(eliminarUsuario);
   const [gestionar, setGestionar] = useState<{ perfil: Perfil; pestana: string } | null>(null);
+  const [usuarioAEliminar, setUsuarioAEliminar] = useState<Perfil | null>(null);
   const [busqueda, setBusqueda] = useState("");
   const [filtroRol, setFiltroRol] = useState("todos");
   const [filtroEstado, setFiltroEstado] = useState("todos");
@@ -123,6 +135,23 @@ function Usuarios() {
   const sinRol = todos.filter((p) => !(asignaciones.data ?? []).some((a) => a.user_id === p.id)).length;
   const refrescar = () => void qc.invalidateQueries();
   const puedeEditar = acceso.can("usuarios", "editar");
+
+  const mutEliminar = useMutation({
+    mutationFn: (id: string) => ejecutarEliminar({ data: { id } }),
+    onSuccess: (res) => {
+      toast.success("Usuario eliminado", {
+        description: `El usuario ${res.email ?? ""} ha sido eliminado exitosamente.`,
+      });
+      setUsuarioAEliminar(null);
+      if (gestionar?.perfil.id === res.id) {
+        setGestionar(null);
+      }
+      refrescar();
+    },
+    onError: (e: Error) => {
+      toast.error("Error al eliminar usuario", { description: e.message });
+    },
+  });
 
   return (
     <div>
@@ -227,15 +256,29 @@ function Usuarios() {
           {
             key: "acciones",
             header: "",
-            className: "w-32 text-right",
-            cell: (f) =>
-              puedeEditar ? (
-                <div className="flex justify-end gap-1" onClick={(e) => e.stopPropagation()}>
-                  <Button variant="ghost" size="icon" title="Editar datos" onClick={() => setGestionar({ perfil: f, pestana: "datos" })}><UserCog className="size-4" /></Button>
-                  <Button variant="ghost" size="icon" title="Roles y alcance" onClick={() => setGestionar({ perfil: f, pestana: "roles" })}><ShieldPlus className="size-4" /></Button>
-                  <Button variant="ghost" size="icon" title="Cambiar contraseña" onClick={() => setGestionar({ perfil: f, pestana: "clave" })}><KeyRound className="size-4" /></Button>
-                </div>
-              ) : null,
+            className: "w-36 text-right",
+            cell: (f) => (
+              <div className="flex justify-end gap-1" onClick={(e) => e.stopPropagation()}>
+                {puedeEditar ? (
+                  <>
+                    <Button variant="ghost" size="icon" title="Editar datos" onClick={() => setGestionar({ perfil: f, pestana: "datos" })}><UserCog className="size-4" /></Button>
+                    <Button variant="ghost" size="icon" title="Roles y alcance" onClick={() => setGestionar({ perfil: f, pestana: "roles" })}><ShieldPlus className="size-4" /></Button>
+                    <Button variant="ghost" size="icon" title="Cambiar contraseña" onClick={() => setGestionar({ perfil: f, pestana: "clave" })}><KeyRound className="size-4" /></Button>
+                  </>
+                ) : null}
+                {acceso.isSuperAdmin && f.id !== acceso.userId ? (
+                  <Button
+                    variant="ghost"
+                    size="icon"
+                    title="Eliminar usuario (solo Super Administrador)"
+                    className="text-muted-foreground hover:bg-destructive/10 hover:text-destructive"
+                    onClick={() => setUsuarioAEliminar(f)}
+                  >
+                    <Trash2 className="size-4" />
+                  </Button>
+                ) : null}
+              </div>
+            ),
           },
         ]}
       />
@@ -249,7 +292,42 @@ function Usuarios() {
         roles={roles.data ?? []}
         ultimo={gestionar ? accesos.data?.[gestionar.perfil.id]?.ultimo_ingreso ?? null : null}
         onCambio={refrescar}
+        onSolicitarEliminar={(p) => setUsuarioAEliminar(p)}
       />
+
+      <AlertDialog open={Boolean(usuarioAEliminar)} onOpenChange={(v) => { if (!v && !mutEliminar.isPending) setUsuarioAEliminar(null); }}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle className="flex items-center gap-2 text-destructive">
+              <Trash2 className="size-5" />
+              ¿Eliminar usuario definitivamente?
+            </AlertDialogTitle>
+            <AlertDialogDescription className="space-y-2 text-sm text-muted-foreground">
+              <span>
+                Estás a punto de eliminar de forma permanente a{" "}
+                <strong className="text-foreground">{usuarioAEliminar?.full_name || "este usuario"}</strong> ({usuarioAEliminar?.email}).
+              </span>
+              <span className="block text-xs">
+                Se revocarán todos sus accesos, credenciales de inicio de sesión, roles asignados y se desvinculará de cualquier empleado. Esta acción es irreversible y está restringida únicamente al rol <strong>Super Administrador</strong>.
+              </span>
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel disabled={mutEliminar.isPending}>Cancelar</AlertDialogCancel>
+            <AlertDialogAction
+              className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
+              disabled={mutEliminar.isPending}
+              onClick={(e) => {
+                e.preventDefault();
+                if (usuarioAEliminar) mutEliminar.mutate(usuarioAEliminar.id);
+              }}
+            >
+              {mutEliminar.isPending ? <Loader2 className="mr-1.5 size-4 animate-spin" /> : <Trash2 className="mr-1.5 size-4" />}
+              {mutEliminar.isPending ? "Eliminando…" : "Sí, eliminar usuario"}
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
     </div>
   );
 }
@@ -262,6 +340,7 @@ function GestionUsuario({
   roles,
   ultimo,
   onCambio,
+  onSolicitarEliminar,
 }: {
   estado: { perfil: Perfil; pestana: string } | null;
   onClose: () => void;
@@ -270,6 +349,7 @@ function GestionUsuario({
   roles: { id: string; name: string; code: string }[];
   ultimo: string | null;
   onCambio: () => void;
+  onSolicitarEliminar?: (perfil: Perfil) => void;
 }) {
   const p = estado?.perfil;
   return (
@@ -292,7 +372,7 @@ function GestionUsuario({
                 <TabsTrigger value="roles"><ShieldPlus className="mr-1.5 size-4" />Roles</TabsTrigger>
                 <TabsTrigger value="clave"><KeyRound className="mr-1.5 size-4" />Contraseña</TabsTrigger>
               </TabsList>
-              <TabsContent value="datos"><DatosUsuario perfil={p} onCambio={onCambio} /></TabsContent>
+              <TabsContent value="datos"><DatosUsuario perfil={p} onCambio={onCambio} onSolicitarEliminar={onSolicitarEliminar} /></TabsContent>
               <TabsContent value="roles"><RolesUsuario perfil={p} asignaciones={asignaciones} roles={roles} onCambio={onCambio} /></TabsContent>
               <TabsContent value="clave"><ClaveUsuario perfil={p} /></TabsContent>
             </Tabs>
@@ -303,7 +383,15 @@ function GestionUsuario({
   );
 }
 
-function DatosUsuario({ perfil, onCambio }: { perfil: Perfil; onCambio: () => void }) {
+function DatosUsuario({
+  perfil,
+  onCambio,
+  onSolicitarEliminar,
+}: {
+  perfil: Perfil;
+  onCambio: () => void;
+  onSolicitarEliminar?: (perfil: Perfil) => void;
+}) {
   const acceso = useAccess();
   const actualizar = useServerFn(actualizarUsuario);
   const [f, setF] = useState({ full_name: perfil.full_name ?? "", email: perfil.email ?? "", is_active: perfil.is_active });
@@ -335,6 +423,28 @@ function DatosUsuario({ perfil, onCambio }: { perfil: Perfil; onCambio: () => vo
       </Button>
     </form>
     <div className="mt-5"><VinculoEmpleado perfil={perfil} /></div>
+
+    {acceso.isSuperAdmin && !propio && onSolicitarEliminar ? (
+      <div className="mt-6 rounded-lg border border-destructive/20 bg-destructive/5 p-4 space-y-2">
+        <div className="flex items-center gap-2 text-destructive font-medium text-sm">
+          <Trash2 className="size-4" />
+          <span>Zona de peligro</span>
+        </div>
+        <p className="text-xs text-muted-foreground">
+          Eliminar permanentemente este usuario de la base de datos y del sistema de autenticación. Esta acción solo puede ser realizada por el rol Super Administrador.
+        </p>
+        <Button
+          type="button"
+          variant="destructive"
+          size="sm"
+          className="w-full mt-2"
+          onClick={() => onSolicitarEliminar(perfil)}
+        >
+          <Trash2 className="size-4 mr-1.5" />
+          Eliminar este usuario
+        </Button>
+      </div>
+    ) : null}
     </>
   );
 }
