@@ -20,6 +20,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { cn } from "@/lib/utils";
 
 import { MultiSelectFilter } from "@/components/multi-select-filter";
+import { useFiltroCampanaPersonas } from "@/lib/filtro-personas";
 
 export const Route = createFileRoute("/_authenticated/asistencia")({
   head: () => ({ meta: [{ title: "Control diario — Convert-IA" }] }),
@@ -170,24 +171,10 @@ function Asistencia() {
     },
   });
 
-  const empleados = useQuery({
-    queryKey: ["empleados-opciones"],
-    queryFn: async () => {
-      const { data } = await dbAny
-        .from("employees")
-        .select("id, document, full_name, position")
-        .order("full_name")
-        .limit(3000);
-      return (data ?? []) as { id: string; document: string; full_name: string; position: string | null }[];
-    },
-  });
 
-  const opcionesCampanas = (campanas.data ?? []).map((c) => ({ value: c.id, label: c.name }));
-  const opcionesPersonas = (empleados.data ?? []).map((e) => ({
-    value: e.document,
-    label: e.full_name,
-    sublabel: `${e.document}${e.position ? ` · ${e.position}` : ""}`,
-  }));
+  const todasCampanas = (campanas.data ?? []).map((c) => ({ value: c.id, label: c.name }));
+  // Campañas y personas coherentes entre sí y en orden alfabético
+  const { opcionesCampanas, opcionesPersonas, placeholderCampanas, placeholderPersonas } = useFiltroCampanaPersonas({ opcionesCampanas: todasCampanas, campanas: f.campanas, personas: f.personas, alCambiarPersonas: (personas) => setF((p) => ({ ...p, personas })) });
 
   const lista = useQuery({
     queryKey: ["asistencia", "lista", f, pagina, TAMANO, orden],
@@ -320,7 +307,7 @@ function Asistencia() {
             <Label>Campañas</Label>
             <MultiSelectFilter
               title="Campañas"
-              placeholder="Todas las campañas"
+              placeholder={placeholderCampanas}
               searchPlaceholder="Buscar campaña…"
               options={opcionesCampanas}
               selected={f.campanas}
@@ -332,7 +319,7 @@ function Asistencia() {
             <Label>Personas</Label>
             <MultiSelectFilter
               title="Personas"
-              placeholder="Todas las personas"
+              placeholder={placeholderPersonas}
               searchPlaceholder="Buscar por cédula o nombre…"
               options={opcionesPersonas}
               selected={f.personas}

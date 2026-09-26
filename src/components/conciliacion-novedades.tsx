@@ -1,14 +1,17 @@
 import { Link } from "@tanstack/react-router";
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState, type ReactNode } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
-import { CheckCircle2, ChevronDown, ChevronRight, Download, Loader2, MessageSquareWarning, RotateCcw } from "lucide-react";
+import {
+  AlertTriangle, CalendarSearch, CheckCircle2, ChevronDown, ChevronRight, CircleHelp, Clock, Download, Loader2,
+  MessageSquareWarning, RotateCcw, SearchX, UserX, XCircle,
+} from "lucide-react";
 import { supabase } from "@/integrations/supabase/client";
 import { dbAny } from "@/lib/db";
 import { useAccess } from "@/lib/session";
 import { descargarCsv } from "@/lib/biometria";
 import { colorTipo, diaSemana, rangoFechas } from "@/lib/novedades";
-import { Paginador, SimpleTable, usePaginado } from "@/components/simple-table";
+import { Paginador, usePaginado } from "@/components/simple-table";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
@@ -23,6 +26,7 @@ export type FilaConciliacion = {
   full_name: string | null;
   position: string | null;
   campaign_label: string | null;
+  campana_empleado: string | null;
   period_start: string;
   period_end: string;
   encontrado: boolean;
@@ -45,27 +49,81 @@ export type FilaConciliacion = {
   reviewed_by: string | null;
 };
 
-const ESTADO: Record<FilaConciliacion["estado"], { label: string; punto: string; texto: string }> = {
-  coherente: { label: "Coherente", punto: "bg-emerald-500", texto: "El biométrico respalda lo reportado." },
-  advertencia: { label: "Revisar días", punto: "bg-amber-500", texto: "Las horas cuadran, pero hay días que no coinciden con las marcaciones." },
-  inconsistente: { label: "Inconsistente", punto: "bg-red-500", texto: "Se reportan más horas de las que respalda el biométrico." },
-  sin_biometria: { label: "Sin biometría", punto: "bg-sky-500", texto: "No hay marcaciones cargadas para este periodo." },
-  no_encontrado: { label: "No encontrado", punto: "bg-zinc-400", texto: "El documento no existe en Empleados." },
-};
 const REVISION: Record<FilaConciliacion["review_status"], { label: string; clase: string }> = {
-  pendiente: { label: "Pendiente", clase: "bg-sky-100 text-sky-800 hover:bg-sky-100 dark:bg-sky-950 dark:text-sky-300" },
+  pendiente: { label: "Pendiente de revisión", clase: "bg-sky-100 text-sky-800 hover:bg-sky-100 dark:bg-sky-950 dark:text-sky-300" },
   aprobado: { label: "Aprobado", clase: "bg-emerald-600 text-white hover:bg-emerald-600" },
   observado: { label: "Observado", clase: "bg-amber-100 text-amber-900 hover:bg-amber-100 dark:bg-amber-950 dark:text-amber-300" },
 };
 
 const h = (v: number) => (v ? v.toLocaleString("es-CO", { maximumFractionDigits: 2 }) : "0");
+const norm = (v: unknown) => String(v ?? "").normalize("NFD").replace(/[\u0300-\u036f]/g, "").trim().toLowerCase();
+const fechaCorta = (f: string) => `${f.slice(8)}/${f.slice(5, 7)}`;
+/** Etiqueta sin el factor de recargo: «Extras diurnas (1,25)» → «Extras diurnas». */
+const nombreConcepto = (e: string) => e.replace(/\s*\(.*\)\s*$/, "");
 
-export function ConciliacionNovedades({ desde, hasta, puedeAprobar }: { desde: string; hasta: string; puedeAprobar: boolean }) {
+/** Solo se concilian quienes reportan horas; asistencia, descansos y faltas van en «Novedades por día». */
+const reportaHoras = (x: FilaConciliacion) => x.conceptos.some((c) => c.reportado > 0);
+
+type Sugerencia = {
+  tipo: "aprobar" | "observar" | "revisar" | "esperar" | "crear";
+  titulo: string;
+  detalle: string;
+  comentario?: string;
+};
+
+/** Qué sugiere el sistema para cada persona, a partir del cruce con el biométrico. */
+function sugerir(x: FilaConciliacion, tol: number): Sugerencia {
+  if (x.estado === "no_encontrado") {
+    return { tipo: "crear", titulo: "No se puede validar", detalle: `La cédula ${x.document} no existe en Empleados. Créala para poder cruzarla con el biométrico.` };
+  }
+  if (x.estado === "sin_biometria") {
+    return { tipo: "esperar", titulo: "Faltan marcaciones del biométrico", detalle: `No hay marcaciones cargadas del ${fechaCorta(x.period_start)} al ${fechaCorta(x.period_end)}. Carga esos CSV en Importaciones antes de aprobar.` };
+  }
+  const faltan = x.conceptos.filter((c) => c.reportado - c.biometrico > tol);
+  const dias = [
+    x.asiste_sin_marca ? `${x.asiste_sin_marca} día(s) con «Asiste» sin marcación` : "",
+    x.asiste_incompleta ? `${x.asiste_incompleta} día(s) con «Asiste» y marcación incompleta` : "",
+    x.marca_en_novedad ? `${x.marca_en_novedad} día(s) con marcación en un día de novedad` : "",
+  ].filter(Boolean);
+  if (faltan.length) {
+    const lista = faltan.map((c) => `${nombreConcepto(c.etiqueta)}: reporta ${h(c.reportado)} h y el biométrico respalda ${h(c.biometrico)} h (faltan ${h(c.reportado - c.biometrico)} h)`);
+    return {
+      tipo: "observar",
+      titulo: "No cuadra: sugerimos observar",
+      detalle: lista.join(" · "),
+      comentario: `${lista.join(". ")}.${dias.length ? ` Además: ${dias.join(", ")}.` : ""} Por favor corregir o adjuntar soporte.`,
+    };
+  }
+  if (dias.length) {
+    return {
+      tipo: "revisar",
+      titulo: "Las horas cuadran, pero hay días por revisar",
+      detalle: `${dias.join(" · ")}. Abre el detalle por día y decide si apruebas u observas.`,
+      comentario: `Las horas reportadas cuadran con el biométrico, pero hay ${dias.join(", ")}. Por favor revisar.`,
+    };
+  }
+  return { tipo: "aprobar", titulo: "Cuadra: sugerimos aprobar", detalle: "El biométrico respalda todas las horas reportadas." };
+}
+
+const ESTILO: Record<Sugerencia["tipo"], { caja: string; icono: ReactNode; chip: string }> = {
+  aprobar: { caja: "border-emerald-300 bg-emerald-50 dark:border-emerald-900 dark:bg-emerald-950/40", icono: <CheckCircle2 className="size-4 text-emerald-600" />, chip: "Cuadran" },
+  revisar: { caja: "border-amber-300 bg-amber-50 dark:border-amber-900 dark:bg-amber-950/40", icono: <CalendarSearch className="size-4 text-amber-600" />, chip: "Revisar días" },
+  observar: { caja: "border-red-300 bg-red-50 dark:border-red-900 dark:bg-red-950/40", icono: <XCircle className="size-4 text-red-600" />, chip: "No cuadran" },
+  esperar: { caja: "border-sky-300 bg-sky-50 dark:border-sky-900 dark:bg-sky-950/40", icono: <Clock className="size-4 text-sky-600" />, chip: "Sin biometría" },
+  crear: { caja: "border-zinc-300 bg-zinc-50 dark:border-zinc-700 dark:bg-zinc-900/40", icono: <UserX className="size-4 text-zinc-500" />, chip: "No encontrados" },
+};
+
+export function ConciliacionNovedades({
+  desde, hasta, puedeAprobar, campanas = [], personas = [], buscar = "", documentosCampanas = null,
+}: {
+  desde: string; hasta: string; puedeAprobar: boolean;
+  campanas?: string[]; personas?: string[]; buscar?: string; documentosCampanas?: string[] | null;
+}) {
   const qc = useQueryClient();
   const acceso = useAccess();
-  const [filtro, setFiltro] = useState<string>("todos");
+  const [filtro, setFiltro] = useState<Sugerencia["tipo"] | "todos" | "pendientes">("todos");
   const [abierta, setAbierta] = useState<string | null>(null);
-  const [observar, setObservar] = useState<FilaConciliacion | null>(null);
+  const [observar, setObservar] = useState<{ fila: FilaConciliacion; comentario: string } | null>(null);
   const [trabajando, setTrabajando] = useState(false);
 
   const tolerancia = useQuery({
@@ -85,18 +143,41 @@ export function ConciliacionNovedades({ desde, hasta, puedeAprobar }: { desde: s
       return (data as unknown as FilaConciliacion[]) ?? [];
     },
   });
-  const filas = useMemo(() => conc.data ?? [], [conc.data]);
-  const cuenta = (f: (x: FilaConciliacion) => boolean) => filas.filter(f).length;
+
+  // Mismos filtros que el resto de Novedades: campaña (por Empleados o por la etiqueta de la plantilla), personas y búsqueda
+  const filtradas = useMemo(() => {
+    const docs = documentosCampanas ? new Set(documentosCampanas) : null;
+    const q = norm(buscar);
+    return (conc.data ?? []).filter((x) => {
+      if (campanas.length) {
+        const deCampana = docs?.has(x.document) || campanas.some((c) => norm(x.campana_empleado) === norm(c) || norm(x.campaign_label).includes(norm(c)));
+        if (!deCampana) return false;
+      }
+      if (personas.length && !personas.includes(x.document)) return false;
+      if (q && !norm(`${x.document} ${x.full_name} ${x.position} ${x.campaign_label} ${x.campana_empleado}`).includes(q)) return false;
+      return true;
+    });
+  }, [conc.data, campanas, personas, buscar, documentosCampanas]);
+
+  const conHoras = useMemo(() => filtradas.filter(reportaHoras).map((x) => ({ fila: x, sug: sugerir(x, tol) })), [filtradas, tol]);
+  const sinHoras = filtradas.length - conHoras.length;
   const visibles = useMemo(
-    () =>
-      filas.filter((x) =>
-        filtro === "todos" ? true : filtro.startsWith("rev:") ? x.review_status === filtro.slice(4) : x.estado === filtro,
-      ),
-    [filas, filtro],
+    () => conHoras.filter(({ fila, sug }) => filtro === "todos" || (filtro === "pendientes" ? fila.review_status === "pendiente" : sug.tipo === filtro)),
+    [conHoras, filtro],
   );
-  const pag = usePaginado(visibles, 20);
-  const sinBiometria = filas.length > 0 && filas.every((x) => x.estado === "sin_biometria" || x.estado === "no_encontrado");
-  const coherentesPendientes = filas.filter((x) => x.estado === "coherente" && x.review_status === "pendiente");
+  const pag = usePaginado(visibles, 10);
+  // Al cambiar filtros se vuelve a la primera página
+  const claveFiltros = `${filtro}|${campanas.join()}|${personas.join()}|${buscar}`;
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  useEffect(() => { pag.reiniciar(); }, [claveFiltros]);
+
+  const cuenta = (t: Sugerencia["tipo"]) => conHoras.filter((x) => x.sug.tipo === t).length;
+  const aprobables = conHoras.filter((x) => x.sug.tipo === "aprobar" && x.fila.review_status === "pendiente");
+  // Si la búsqueda deja una sola persona, se abre su detalle
+  const unica = conHoras.length === 1 && (personas.length === 1 || Boolean(buscar)) ? conHoras[0]!.fila.id : null;
+  useEffect(() => {
+    if (unica) setAbierta(unica);
+  }, [unica]);
 
   async function revisar(ids: string[], estado: "aprobado" | "observado" | "pendiente", comentario?: string) {
     setTrabajando(true);
@@ -106,9 +187,7 @@ export function ConciliacionNovedades({ desde, hasta, puedeAprobar }: { desde: s
       toast.error("No se pudo registrar la revisión", { description: error.message });
       return false;
     }
-    toast.success(
-      estado === "aprobado" ? `${data} aprobado(s)` : estado === "observado" ? "Observación registrada" : "Revisión reabierta",
-    );
+    toast.success(estado === "aprobado" ? `${data} aprobado(s)` : estado === "observado" ? "Observación registrada" : "Revisión reabierta");
     void qc.invalidateQueries({ queryKey: ["nov-conciliacion"] });
     return true;
   }
@@ -116,22 +195,19 @@ export function ConciliacionNovedades({ desde, hasta, puedeAprobar }: { desde: s
   function exportar() {
     descargarCsv(
       `conciliacion_novedades_${desde}_${hasta}`,
-      filas.map((x) => {
+      conHoras.map(({ fila: x, sug }) => {
         const fila: Record<string, unknown> = {
           documento: x.document,
           empleado: x.full_name ?? "",
           cargo: x.position ?? "",
-          campana: x.campaign_label ?? "",
+          campana: x.campana_empleado ?? x.campaign_label ?? "",
           periodo: `${x.period_start} a ${x.period_end}`,
-          validacion: ESTADO[x.estado].label,
-          dias_asiste_plantilla: x.dias_asiste,
-          dias_con_marcacion: x.dias_marcados,
-          asiste_sin_marcacion: x.asiste_sin_marca,
-          marca_en_dia_de_novedad: x.marca_en_novedad,
+          resultado: ESTILO[sug.tipo].chip,
+          sugerencia: `${sug.titulo}. ${sug.detalle}`,
         };
         for (const c of x.conceptos) {
-          fila[`${c.etiqueta} reportado`] = c.reportado;
-          fila[`${c.etiqueta} biometrico`] = c.biometrico;
+          fila[`${nombreConcepto(c.etiqueta)} reportado`] = c.reportado;
+          fila[`${nombreConcepto(c.etiqueta)} biometrico`] = c.biometrico;
         }
         return {
           ...fila,
@@ -147,182 +223,224 @@ export function ConciliacionNovedades({ desde, hasta, puedeAprobar }: { desde: s
     );
   }
 
-  const tarjetas = [
-    { k: "todos", t: "Personas", v: filas.length, punto: "" },
-    { k: "coherente", t: "Coherentes", v: cuenta((x) => x.estado === "coherente"), punto: ESTADO.coherente.punto },
-    { k: "advertencia", t: "Revisar días", v: cuenta((x) => x.estado === "advertencia"), punto: ESTADO.advertencia.punto },
-    { k: "inconsistente", t: "Inconsistentes", v: cuenta((x) => x.estado === "inconsistente"), punto: ESTADO.inconsistente.punto },
-    { k: "sin_biometria", t: "Sin biometría", v: cuenta((x) => x.estado === "sin_biometria"), punto: ESTADO.sin_biometria.punto },
-    { k: "rev:pendiente", t: "Pendientes de aprobar", v: cuenta((x) => x.review_status === "pendiente"), punto: "" },
+  const chips: { k: typeof filtro; t: string; v: number; icono?: ReactNode }[] = [
+    { k: "todos", t: "Todas", v: conHoras.length },
+    { k: "aprobar", t: "Cuadran", v: cuenta("aprobar"), icono: ESTILO.aprobar.icono },
+    { k: "revisar", t: "Revisar días", v: cuenta("revisar"), icono: ESTILO.revisar.icono },
+    { k: "observar", t: "No cuadran", v: cuenta("observar"), icono: ESTILO.observar.icono },
+    { k: "esperar", t: "Sin biometría", v: cuenta("esperar"), icono: ESTILO.esperar.icono },
+    { k: "crear", t: "No encontrados", v: cuenta("crear"), icono: ESTILO.crear.icono },
+    { k: "pendientes", t: "Pendientes de revisión", v: conHoras.filter((x) => x.fila.review_status === "pendiente").length },
   ];
 
   return (
     <div className="space-y-3">
-      {sinBiometria ? (
-        <Card className="border-sky-300 bg-sky-50 p-4 text-sm dark:bg-sky-950/40">
-          <p className="font-medium">No hay marcaciones del biométrico para este periodo ({desde} a {hasta}).</p>
+      <Card className="flex flex-wrap items-start gap-3 p-4 text-sm">
+        <CircleHelp className="mt-0.5 size-5 shrink-0 text-primary" />
+        <div className="min-w-0 flex-1 space-y-1">
+          <p className="font-medium">¿Qué es la conciliación?</p>
           <p className="text-muted-foreground">
-            La plantilla se cargó, pero no hay con qué validarla. Carga los CSV del biométrico de esas fechas en{" "}
-            <Link to="/importaciones" className="text-primary underline">Importaciones</Link>: el cruce se hace automáticamente.
+            Compara las <b>horas que reporta el supervisor</b> (nocturnas, dominicales/festivos y extras) con las que <b>respalda el biométrico</b>.
+            Si lo reportado no supera lo marcado en más de {h(tol)} h, cuadra y se sugiere aprobar; si no, se sugiere observar con el comentario ya escrito.
           </p>
-        </Card>
-      ) : null}
+          {sinHoras > 0 ? (
+            <p className="text-muted-foreground">
+              <b>{sinHoras} persona(s)</b> de la plantilla no reportan horas (solo asistencia, descanso o faltas): no necesitan conciliación y se revisan en «Novedades por día».
+            </p>
+          ) : null}
+        </div>
+        <div className="flex gap-2">
+          {acceso.can("novedades", "exportar") ? (
+            <Button variant="outline" size="sm" onClick={exportar} disabled={!conHoras.length}>
+              <Download className="size-4" /> Exportar
+            </Button>
+          ) : null}
+          {puedeAprobar && aprobables.length ? (
+            <Button size="sm" disabled={trabajando} onClick={() => revisar(aprobables.map((x) => x.fila.id), "aprobado")}>
+              <CheckCircle2 className="size-4" /> Aprobar las {aprobables.length} que cuadran
+            </Button>
+          ) : null}
+        </div>
+      </Card>
 
-      <div className="grid gap-2 sm:grid-cols-3 xl:grid-cols-6">
-        {tarjetas.map((c) => (
+      <div className="flex flex-wrap gap-2">
+        {chips.map((c) => (
           <button
             key={c.k}
             type="button"
             onClick={() => setFiltro(c.k)}
-            className={cn("rounded-xl border bg-card p-3 text-left transition-colors hover:border-primary", filtro === c.k && "border-primary ring-1 ring-primary")}
+            className={cn(
+              "flex items-center gap-2 rounded-full border bg-card px-3 py-1.5 text-sm transition-colors hover:border-primary",
+              filtro === c.k && "border-primary bg-primary/10 font-medium",
+              !c.v && c.k !== "todos" && "opacity-50",
+            )}
           >
-            <p className="flex items-center gap-1.5 text-xs text-muted-foreground">
-              {c.punto ? <span className={cn("size-2 rounded-full", c.punto)} /> : null}
-              {c.t}
-            </p>
-            <p className="text-xl font-semibold tabular-nums">{conc.isLoading ? "…" : c.v}</p>
+            {c.icono}
+            {c.t}
+            <span className="rounded-full bg-muted px-2 text-xs tabular-nums">{conc.isLoading ? "…" : c.v}</span>
           </button>
         ))}
       </div>
 
-      <div className="flex flex-wrap items-center justify-between gap-2">
-        <p className="text-xs text-muted-foreground">
-          Se compara lo reportado en la plantilla con lo que respalda el biométrico. Coherente si lo reportado no supera lo marcado en más de {h(tol)} h (ajústalo en Reglas de cálculo). Los ajustes, bonificaciones y comisiones no se validan con el biométrico.
-        </p>
-        <div className="flex gap-2">
-          {acceso.can("novedades", "exportar") ? (
-            <Button variant="outline" size="sm" onClick={exportar} disabled={!filas.length}>
-              <Download className="size-4" /> Exportar
-            </Button>
-          ) : null}
-          {puedeAprobar && coherentesPendientes.length ? (
-            <Button size="sm" disabled={trabajando} onClick={() => revisar(coherentesPendientes.map((x) => x.id), "aprobado")}>
-              <CheckCircle2 className="size-4" /> Aprobar coherentes ({coherentesPendientes.length})
-            </Button>
-          ) : null}
+      {conc.isLoading ? (
+        <p className="py-10 text-center text-sm text-muted-foreground"><Loader2 className="mr-2 inline size-4 animate-spin" />Cruzando las novedades con el biométrico…</p>
+      ) : conc.error ? (
+        <p className="py-10 text-center text-sm text-destructive">{(conc.error as Error).message}</p>
+      ) : !conc.data?.length ? (
+        <Vacio texto="No hay plantillas de novedades con horas para este periodo." />
+      ) : !visibles.length ? (
+        <Vacio texto={filtradas.length ? "Nadie en esta categoría con los filtros actuales." : "Ninguna persona coincide con los filtros (campaña, persona o búsqueda)."} />
+      ) : (
+        <div className="space-y-3">
+          {pag.visibles.map(({ fila: x, sug }) => (
+            <TarjetaPersona
+              key={x.id}
+              x={x}
+              sug={sug}
+              tol={tol}
+              abierta={abierta === x.id}
+              alAbrir={() => setAbierta((a) => (a === x.id ? null : x.id))}
+              puedeAprobar={puedeAprobar}
+              trabajando={trabajando}
+              alAprobar={() => revisar([x.id], "aprobado")}
+              alObservar={() => setObservar({ fila: x, comentario: sug.comentario ?? "" })}
+              alReabrir={() => revisar([x.id], "pendiente")}
+            />
+          ))}
         </div>
-      </div>
+      )}
 
-      <SimpleTable<FilaConciliacion>
-        cargando={conc.isLoading}
-        filas={pag.visibles}
-        getKey={(x) => x.id}
-        expandida={abierta}
-        onFilaClick={(x) => setAbierta((a) => (a === x.id ? null : x.id))}
-        detalle={(x) => <DetalleDias fila={x} />}
-        vacio={conc.error ? (conc.error as Error).message : "No hay plantillas de novedades cargadas para este periodo."}
-        columnas={[
-          { key: "x", header: "", className: "w-6", cell: (x) => (abierta === x.id ? <ChevronDown className="size-4" /> : <ChevronRight className="size-4 text-muted-foreground" />) },
-          {
-            key: "p",
-            header: "Empleado",
-            cell: (x) => (
-              <div>
-                <p className="font-medium">{x.full_name}</p>
-                <p className="text-xs text-muted-foreground">{x.document}{x.campaign_label ? ` · ${x.campaign_label}` : ""}</p>
-              </div>
-            ),
-          },
-          {
-            key: "v",
-            header: "Validación",
-            cell: (x) => (
-              <span className="flex items-center gap-1.5 text-xs font-medium" title={ESTADO[x.estado].texto}>
-                <span className={cn("size-2.5 rounded-full", ESTADO[x.estado].punto)} />
-                {ESTADO[x.estado].label}
-              </span>
-            ),
-          },
-          ...[0, 1, 2, 3].map((i) => ({
-            key: `c${i}`,
-            header: <span className="text-xs">{["Nocturnas", "Dom./fest.", "Extra diurna", "Extra nocturna"][i]}<br /><span className="font-normal text-muted-foreground">reportado / biom.</span></span>,
-            cell: (x: FilaConciliacion) => {
-              const c = x.conceptos[i]!;
-              const exceso = x.hay_biometria && c.reportado - c.biometrico > tol;
-              if (!c.reportado && !c.biometrico) return <span className="text-muted-foreground">—</span>;
-              return (
-                <span className={cn("tabular-nums text-xs", exceso && "font-semibold text-destructive")} title={exceso ? `Faltan ${h(c.reportado - c.biometrico)} h de respaldo biométrico` : undefined}>
-                  {h(c.reportado)} / {x.hay_biometria ? h(c.biometrico) : "?"}
-                </span>
-              );
-            },
-          })),
-          {
-            key: "d",
-            header: "Días",
-            cell: (x) => (
-              <div className="text-xs">
-                <p className="tabular-nums">{x.dias_asiste} asiste · {x.dias_marcados} marcados</p>
-                {x.hay_biometria && x.asiste_sin_marca ? <p className="text-amber-700 dark:text-amber-400">{x.asiste_sin_marca} «Asiste» sin marcación</p> : null}
-                {x.hay_biometria && x.marca_en_novedad ? <p className="text-amber-700 dark:text-amber-400">{x.marca_en_novedad} con marcación en día de novedad</p> : null}
-              </div>
-            ),
-          },
-          {
-            key: "r",
-            header: "Revisión nómina",
-            cell: (x) => (
-              <div className="max-w-52 text-xs">
-                <Badge variant="secondary" className={REVISION[x.review_status].clase}>{REVISION[x.review_status].label}</Badge>
-                {x.review_comment ? <p className="mt-1 line-clamp-2 text-muted-foreground" title={x.review_comment}>{x.review_comment}</p> : null}
-                {x.reviewed_by ? <p className="text-[11px] text-muted-foreground">{x.reviewed_by}</p> : null}
-              </div>
-            ),
-          },
-          {
-            key: "a",
-            header: "",
-            className: "w-36 text-right",
-            cell: (x) =>
-              puedeAprobar ? (
-                <div className="flex justify-end gap-1" onClick={(e) => e.stopPropagation()}>
-                  {x.review_status !== "aprobado" ? (
-                    <Button size="sm" variant="ghost" title="Aprobar" disabled={trabajando} onClick={() => revisar([x.id], "aprobado")}>
-                      <CheckCircle2 className="size-4 text-emerald-600" />
-                    </Button>
-                  ) : null}
-                  <Button size="sm" variant="ghost" title="Observar (requiere comentario)" disabled={trabajando} onClick={() => setObservar(x)}>
-                    <MessageSquareWarning className="size-4 text-amber-600" />
-                  </Button>
-                  {x.review_status !== "pendiente" ? (
-                    <Button size="sm" variant="ghost" title="Volver a pendiente" disabled={trabajando} onClick={() => revisar([x.id], "pendiente")}>
-                      <RotateCcw className="size-4" />
-                    </Button>
-                  ) : null}
-                </div>
-              ) : null,
-          },
-        ]}
-      />
-
-      <Paginador {...pag.paginador} />
+      {visibles.length > 10 ? <Paginador {...pag.paginador} /> : null}
 
       <ObservarDialog
-        fila={observar}
+        estado={observar}
         onClose={() => setObservar(null)}
         onGuardar={async (comentario) => {
-          if (observar && (await revisar([observar.id], "observado", comentario))) setObservar(null);
+          if (observar && (await revisar([observar.fila.id], "observado", comentario))) setObservar(null);
         }}
       />
     </div>
   );
 }
 
-function ObservarDialog({ fila, onClose, onGuardar }: { fila: FilaConciliacion | null; onClose: () => void; onGuardar: (c: string) => void }) {
-  const [comentario, setComentario] = useState("");
+function Vacio({ texto }: { texto: string }) {
   return (
-    <Dialog open={Boolean(fila)} onOpenChange={(v) => { if (!v) { setComentario(""); onClose(); } }}>
+    <Card className="flex flex-col items-center gap-2 p-10 text-center text-sm text-muted-foreground">
+      <SearchX className="size-6" />
+      {texto}
+    </Card>
+  );
+}
+
+function TarjetaPersona({ x, sug, tol, abierta, alAbrir, puedeAprobar, trabajando, alAprobar, alObservar, alReabrir }: {
+  x: FilaConciliacion; sug: Sugerencia; tol: number; abierta: boolean; alAbrir: () => void; puedeAprobar: boolean; trabajando: boolean;
+  alAprobar: () => void; alObservar: () => void; alReabrir: () => void;
+}) {
+  const e = ESTILO[sug.tipo];
+  const conceptos = x.conceptos.filter((c) => c.reportado > 0 || c.biometrico > 0);
+  const extras = [x.ajustes ? `ajustes ${h(x.ajustes)} h` : "", x.bonificacion ? `bonificación ${h(x.bonificacion)}` : "", x.comisiones ? `comisiones ${h(x.comisiones)}` : ""].filter(Boolean);
+  return (
+    <Card className="overflow-hidden">
+      <div className="flex flex-wrap items-start justify-between gap-3 p-4">
+        <div className="min-w-0">
+          <p className="font-medium">{x.full_name}</p>
+          <p className="text-xs text-muted-foreground">
+            {x.document} · {x.campana_empleado ?? x.campaign_label ?? "Sin campaña"} · periodo {fechaCorta(x.period_start)} al {fechaCorta(x.period_end)}
+          </p>
+        </div>
+        <div className="text-right">
+          <Badge variant="secondary" className={REVISION[x.review_status].clase}>{REVISION[x.review_status].label}</Badge>
+          {x.reviewed_by ? <p className="mt-1 text-[11px] text-muted-foreground">por {x.reviewed_by}</p> : null}
+        </div>
+      </div>
+
+      <div className={cn("mx-4 flex items-start gap-2 rounded-lg border p-3 text-sm", e.caja)}>
+        <span className="mt-0.5">{e.icono}</span>
+        <div className="min-w-0">
+          <p className="font-medium">{sug.titulo}</p>
+          <p className="text-xs text-muted-foreground">{sug.detalle}</p>
+        </div>
+      </div>
+
+      <div className="grid gap-3 p-4 md:grid-cols-[1fr_auto] md:items-end">
+        <table className="w-full max-w-xl text-sm">
+          <thead>
+            <tr className="text-left text-xs text-muted-foreground">
+              <th className="pb-1 font-medium">Horas</th>
+              <th className="pb-1 text-right font-medium">Reportadas</th>
+              <th className="pb-1 text-right font-medium">Biométrico</th>
+              <th className="pb-1 pl-4 font-medium">Resultado</th>
+            </tr>
+          </thead>
+          <tbody>
+            {conceptos.map((c) => {
+              const dif = c.reportado - c.biometrico;
+              const falta = x.hay_biometria && dif > tol;
+              return (
+                <tr key={c.clave} className="border-t">
+                  <td className="py-1.5">{nombreConcepto(c.etiqueta)}</td>
+                  <td className="py-1.5 text-right tabular-nums">{h(c.reportado)} h</td>
+                  <td className="py-1.5 text-right tabular-nums">{x.hay_biometria ? `${h(c.biometrico)} h` : "—"}</td>
+                  <td className={cn("py-1.5 pl-4 text-xs", falta ? "font-medium text-destructive" : "text-muted-foreground")}>
+                    {!x.hay_biometria ? "sin datos" : falta ? `faltan ${h(dif)} h` : c.reportado ? "✓ respaldado" : "no reportadas"}
+                  </td>
+                </tr>
+              );
+            })}
+          </tbody>
+        </table>
+        <div className="flex flex-wrap justify-end gap-2">
+          <Button size="sm" variant="ghost" onClick={alAbrir}>
+            {abierta ? <ChevronDown className="size-4" /> : <ChevronRight className="size-4" />} Detalle por día
+          </Button>
+          {puedeAprobar ? (
+            <>
+              {x.review_status !== "pendiente" ? (
+                <Button size="sm" variant="outline" disabled={trabajando} onClick={alReabrir}><RotateCcw className="size-4" /> Reabrir</Button>
+              ) : null}
+              {x.review_status !== "observado" ? (
+                <Button size="sm" variant={sug.tipo === "observar" ? "default" : "outline"} disabled={trabajando} onClick={alObservar}>
+                  <MessageSquareWarning className="size-4" /> {sug.tipo === "observar" ? "Observar (comentario sugerido)" : "Observar"}
+                </Button>
+              ) : null}
+              {x.review_status !== "aprobado" ? (
+                <Button size="sm" variant={sug.tipo === "aprobar" ? "default" : "outline"} disabled={trabajando || sug.tipo === "esperar" || sug.tipo === "crear"} onClick={alAprobar}
+                  title={sug.tipo === "esperar" || sug.tipo === "crear" ? "No se puede aprobar sin validar contra el biométrico" : undefined}>
+                  <CheckCircle2 className="size-4" /> Aprobar
+                </Button>
+              ) : null}
+            </>
+          ) : null}
+        </div>
+      </div>
+
+      {extras.length || x.review_comment || x.observaciones ? (
+        <div className="space-y-1 border-t px-4 py-2 text-xs text-muted-foreground">
+          {extras.length ? <p><AlertTriangle className="mr-1 inline size-3.5" />No se validan con el biométrico: {extras.join(" · ")}.</p> : null}
+          {x.review_comment ? <p><b>Comentario de revisión:</b> {x.review_comment}</p> : null}
+          {x.observaciones ? <p><b>Observaciones de la plantilla:</b> {x.observaciones}</p> : null}
+        </div>
+      ) : null}
+
+      {abierta ? <div className="border-t bg-muted/20"><DetalleDias fila={x} /></div> : null}
+    </Card>
+  );
+}
+
+function ObservarDialog({ estado, onClose, onGuardar }: { estado: { fila: FilaConciliacion; comentario: string } | null; onClose: () => void; onGuardar: (c: string) => void }) {
+  const [comentario, setComentario] = useState("");
+  useEffect(() => { setComentario(estado?.comentario ?? ""); }, [estado]);
+  return (
+    <Dialog open={Boolean(estado)} onOpenChange={(v) => { if (!v) onClose(); }}>
       <DialogContent>
         <DialogHeader>
-          <DialogTitle>Observar novedades de {fila?.full_name}</DialogTitle>
-          <DialogDescription>
-            {fila ? ESTADO[fila.estado].texto : ""} Escribe qué debe corregir o justificar el supervisor; queda en el historial.
-          </DialogDescription>
+          <DialogTitle>Observar novedades de {estado?.fila.full_name}</DialogTitle>
+          <DialogDescription>El comentario queda en el historial y le indica al supervisor qué corregir o justificar. Puedes editar la sugerencia.</DialogDescription>
         </DialogHeader>
-        <Textarea value={comentario} onChange={(e) => setComentario(e.target.value)} placeholder="Ej: reporta 6 h extra diurnas y el biométrico solo respalda 3 h. Adjuntar soporte." rows={4} />
+        <Textarea value={comentario} onChange={(e) => setComentario(e.target.value)} placeholder="Ej: reporta 6 h extra diurnas y el biométrico solo respalda 3 h. Adjuntar soporte." rows={5} />
         <DialogFooter>
           <Button variant="outline" onClick={onClose}>Cancelar</Button>
-          <Button disabled={comentario.trim().length < 5} onClick={() => { onGuardar(comentario); setComentario(""); }}>Guardar observación</Button>
+          <Button disabled={comentario.trim().length < 5} onClick={() => onGuardar(comentario)}>Guardar observación</Button>
         </DialogFooter>
       </DialogContent>
     </Dialog>
@@ -350,7 +468,7 @@ function DetalleDias({ fila }: { fila: FilaConciliacion }) {
   if (datos.isLoading) return <p className="p-4 text-sm text-muted-foreground"><Loader2 className="mr-2 inline size-4 animate-spin" />Cruzando con el biométrico…</p>;
   const fechas = rangoFechas(fila.period_start, fila.period_end);
   return (
-    <div className="overflow-x-auto px-8 py-3">
+    <div className="overflow-x-auto px-4 py-3">
       <table className="w-full text-xs">
         <thead className="text-muted-foreground">
           <tr className="text-left">
@@ -378,7 +496,7 @@ function DetalleDias({ fila }: { fila: FilaConciliacion }) {
               : null;
             return (
               <tr key={f} className="border-t">
-                <td className="py-1 tabular-nums">{diaSemana(f)} {f.slice(8)}/{f.slice(5, 7)}</td>
+                <td className="py-1 tabular-nums">{diaSemana(f)} {fechaCorta(f)}</td>
                 <td>{tipo ? <span className={cn("rounded px-1.5 py-0.5", colorTipo(tipo))}>{tipo}</span> : <span className="text-muted-foreground">—</span>}</td>
                 <td className="tabular-nums">{j?.first_in?.slice(11, 16) ?? "—"}</td>
                 <td className="tabular-nums">{j?.last_out?.slice(11, 16) ?? "—"}</td>
@@ -392,7 +510,6 @@ function DetalleDias({ fila }: { fila: FilaConciliacion }) {
           })}
         </tbody>
       </table>
-      {fila.observaciones ? <p className="mt-2 text-xs"><span className="font-medium">Observaciones de la plantilla:</span> {fila.observaciones}</p> : null}
     </div>
   );
 }

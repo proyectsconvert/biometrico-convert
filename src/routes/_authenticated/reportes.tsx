@@ -131,7 +131,7 @@ const REPORTES: Reporte[] = [
   },
   {
     id: "ausentismo", grupo: "Control de marcaciones", titulo: "Ausentismo", icon: CalendarX2,
-    descripcion: "Días laborales (sin festivos) en que personas activas que sí marcan en el periodo no registraron marcación, con la novedad reportada si existe.",
+    descripcion: "Días laborales (sin festivos, con datos cargados) en que personas que sí marcan en el periodo no registraron marcación, desde su ingreso y hasta su fecha de retiro, con la novedad reportada si existe.",
     cargar: (f) => rpc("reporte_ausentismo", f),
   },
   {

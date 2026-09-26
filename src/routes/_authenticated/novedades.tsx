@@ -16,6 +16,7 @@ import {
   XCircle,
 } from "lucide-react";
 import { MultiSelectFilter } from "@/components/multi-select-filter";
+import { useFiltroCampanaPersonas } from "@/lib/filtro-personas";
 import { supabase } from "@/integrations/supabase/client";
 import { useAccess } from "@/lib/session";
 import { descargarCsv } from "@/lib/biometria";
@@ -144,27 +145,25 @@ function Novedades() {
     },
   });
 
-  const empleados = useQuery({
-    queryKey: ["empleados-opciones-nov"],
-    queryFn: async () => {
-      const { data } = await supabase
-        .from("employees")
-        .select("id, document, full_name, position")
-        .order("full_name")
-        .limit(3000);
-      return (data ?? []) as { id: string; document: string; full_name: string; position: string | null }[];
-    },
-  });
 
-  const opcionesCampanas = (campanas.data ?? []).map((c) => ({ value: c.name, label: c.name }));
-  const opcionesPersonas = (empleados.data ?? []).map((e) => ({
-    value: e.document,
-    label: e.full_name,
-    sublabel: `${e.document}${e.position ? ` · ${e.position}` : ""}`,
-  }));
+  const todasCampanas = (campanas.data ?? []).map((c) => ({ value: c.name, label: c.name }));
+  // Campañas y personas coherentes entre sí y en orden alfabético
+  const { opcionesCampanas, opcionesPersonas, placeholderCampanas, placeholderPersonas, documentosCampanas } = useFiltroCampanaPersonas({ opcionesCampanas: todasCampanas, campanas: campanasSel, campanasPor: "nombre", personas: personasSel, alCambiarPersonas: setPersonasSel });
+
+  // La búsqueda se aplica sola mientras se escribe
+  useEffect(() => {
+    const t = setTimeout(() => setBuscar(texto.trim()), 350);
+    return () => clearTimeout(t);
+  }, [texto]);
+
+  // La plantilla escribe la campaña con su código («0006 MUNDO»): se filtra por las personas de la
+  // campaña según Empleados o por el nombre dentro de la etiqueta
+  const filtroCampana = campanasSel.length
+    ? [`document.in.(${(documentosCampanas ?? []).join(",") || "0"})`, ...campanasSel.map((c) => `campaign_label.ilike."*${c.replace(/"/g, "")}*"`)].join(",")
+    : null;
 
   const entradas = useQuery({
-    queryKey: ["nov-entradas", desde, hasta, campanasSel, personasSel, buscar],
+    queryKey: ["nov-entradas", desde, hasta, filtroCampana, personasSel, buscar],
     queryFn: () =>
       traerTodo<Entrada>((a, b) => {
         let q = supabase
@@ -175,7 +174,7 @@ function Novedades() {
           .order("full_name")
           .order("work_date")
           .range(a, b);
-        if (campanasSel.length > 0) q = q.in("campaign_label", campanasSel);
+        if (filtroCampana) q = q.or(filtroCampana);
         if (personasSel.length > 0) q = q.in("document", personasSel);
         const t = buscar.trim();
         if (t) q = /^\d+$/.test(t) ? q.eq("document", t) : q.or(`full_name.ilike.%${t}%,campaign_label.ilike.%${t}%`);
@@ -184,10 +183,10 @@ function Novedades() {
   });
 
   const totales = useQuery({
-    queryKey: ["nov-totales", desde, hasta, campanasSel, personasSel, buscar],
+    queryKey: ["nov-totales", desde, hasta, filtroCampana, personasSel, buscar],
     queryFn: async () => {
       let q = supabase.from("novelty_totals").select("*").lte("period_start", hasta).gte("period_end", desde).order("full_name").limit(1000);
-      if (campanasSel.length > 0) q = q.in("campaign_label", campanasSel);
+      if (filtroCampana) q = q.or(filtroCampana);
       if (personasSel.length > 0) q = q.in("document", personasSel);
       const t = buscar.trim();
       if (t) q = /^\d+$/.test(t) ? q.eq("document", t) : q.or(`full_name.ilike.%${t}%,campaign_label.ilike.%${t}%`);
@@ -329,7 +328,7 @@ function Novedades() {
             <Label>Campañas</Label>
             <MultiSelectFilter
               title="Campañas"
-              placeholder="Todas las campañas"
+              placeholder={placeholderCampanas}
               searchPlaceholder="Buscar campaña…"
               options={opcionesCampanas}
               selected={campanasSel}
@@ -341,7 +340,7 @@ function Novedades() {
             <Label>Personas</Label>
             <MultiSelectFilter
               title="Personas"
-              placeholder="Todas las personas"
+              placeholder={placeholderPersonas}
               searchPlaceholder="Buscar por cédula o nombre…"
               options={opcionesPersonas}
               selected={personasSel}
@@ -357,14 +356,13 @@ function Novedades() {
               <Input
                 id="q"
                 className="pl-9"
-                placeholder="Cédula, nombre, cargo o texto…"
+                placeholder="Escribe cédula o nombre: se filtra solo…"
                 value={texto}
                 onChange={(e) => setTexto(e.target.value)}
               />
             </div>
           </div>
           <div className="flex items-center gap-2">
-            <Button type="submit"><Search className="size-4" /> Filtrar</Button>
             {(campanasSel.length > 0 || personasSel.length > 0 || Boolean(buscar) || conExcluidos) && (
               <Button
                 type="button"
@@ -397,7 +395,7 @@ function Novedades() {
         </TabsList>
 
         <TabsContent value="conciliacion">
-          <ConciliacionNovedades desde={desde} hasta={hasta} puedeAprobar={puedeAprobar} />
+          <ConciliacionNovedades desde={desde} hasta={hasta} puedeAprobar={puedeAprobar} campanas={campanasSel} personas={personasSel} buscar={buscar} documentosCampanas={documentosCampanas} />
         </TabsContent>
 
         <TabsContent value="matriz">

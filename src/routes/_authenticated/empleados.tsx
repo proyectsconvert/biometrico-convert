@@ -147,7 +147,8 @@ function Empleados() {
         { name: "cost_center_id", label: "Centro de costo", fuente: { tabla: "cost_centers" } },
         { name: "shift_id", label: "Turno", fuente: { tabla: "shifts" } },
         { name: "hire_date", label: "Fecha de ingreso", type: "date" },
-        { name: "termination_date", label: "Fecha de retiro", type: "date" },
+        { name: "termination_date", label: "Fecha de retiro", type: "date", ayuda: "El ausentismo de la persona se cuenta solo hasta esta fecha." },
+        { name: "biometric_group", label: "Grupo biométrico", ayuda: "Grupo del lector BioStar; puede asignar el empleador automáticamente." },
       ]}
     />
   );
