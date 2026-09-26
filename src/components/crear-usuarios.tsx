@@ -27,6 +27,8 @@ type Campana = { id: string; code: string | null; name: string };
 type Celdas = Partial<Record<string, string>>;
 
 const SIN_CAMPANA = "__ninguna__";
+const LEYENDA = "Convert-IA Biométrico — Control de Asistencia y Nómina";
+const AVISO = "Abre el archivo, completa la información y cárgalo de nuevo.";
 
 /** Plantilla de carga masiva por tipo de rol: columnas y explicación. */
 const PLANTILLAS: Record<GrupoRol, { titulo: string; icono: ReactNode; columnas: string[]; ayuda: string[] }> = {

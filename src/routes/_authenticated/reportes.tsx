@@ -4,7 +4,7 @@ import { useQuery } from "@tanstack/react-query";
 import * as XLSX from "xlsx";
 import { toast } from "sonner";
 import {
-  AlarmClock, CalendarX2, History, ClipboardList, Clock3, Download, FileSpreadsheet, Info, ListChecks, Loader2, Scale, Table2, TriangleAlert, Users,
+  AlarmClock, CalendarX2, History, ClipboardList, Clock3, Download, FileSpreadsheet, Info, ListChecks, Loader2, Scale, Search, Table2, TriangleAlert, Users, X,
 } from "lucide-react";
 import { supabase } from "@/integrations/supabase/client";
 import { dbAny } from "@/lib/db";
@@ -74,7 +74,7 @@ const REPORTES: Reporte[] = [
       for (let i = 0; i < 100; i++) {
         let q = dbAny
           .from("asistencia_reporte")
-          .select("work_date, document, full_name, position, campaign_name, employer_name, shift_name, hora_entrada, hora_salida, worked_minutes, overtime_minutes, overtime_night_minutes, night_minutes, sunday_holiday_minutes, late_minutes, status")
+          .select("work_date, document, full_name, position, campaign_name, cost_center_name, employer_name, shift_name, hora_entrada, hora_salida, worked_minutes, overtime_minutes, overtime_night_minutes, night_minutes, sunday_holiday_minutes, late_minutes, status")
           .gte("work_date", f.desde).lte("work_date", f.hasta)
           .order("work_date", { ascending: false }).order("full_name").range(i * 1000, i * 1000 + 999);
         if (!f.excluidos) q = q.eq("en_reportes", true);
@@ -84,7 +84,7 @@ const REPORTES: Reporte[] = [
         for (const r of (data ?? []) as Crudo[]) {
           out.push({
             fecha: r.work_date, documento: r.document, empleado: r.full_name, cargo: r.position, campana: r.campaign_name,
-            empleador: r.employer_name, turno: r.shift_name, entrada: String(r.hora_entrada ?? "").slice(0, 5), salida: String(r.hora_salida ?? "").slice(0, 5),
+            centro_costo: r.cost_center_name, empleador: r.employer_name, turno: r.shift_name, entrada: String(r.hora_entrada ?? "").slice(0, 5), salida: String(r.hora_salida ?? "").slice(0, 5),
             horas_trabajadas: hm(r.worked_minutes), extra_diurnas: hm(Number(r.overtime_minutes) - Number(r.overtime_night_minutes)),
             extra_nocturnas: hm(r.overtime_night_minutes), recargo_nocturno: hm(Math.max(0, Number(r.night_minutes) - Number(r.overtime_night_minutes))),
             dominical_festivo: hm(r.sunday_holiday_minutes), minutos_tarde: r.late_minutes, estado: r.status,
@@ -192,6 +192,7 @@ function Reportes() {
   const acceso = useAccess();
   const [reporteId, setReporteId] = useState(REPORTES[0]!.id);
   const [f, setF] = useState<Filtros>({ desde: "", hasta: "", campana: "todas", excluidos: false });
+  const [busqueda, setBusqueda] = useState("");
   const [aplicados, setAplicados] = useState<Filtros | null>(null);
   const [orden, setOrden] = useState<Orden | null>(null);
   const puedeExportar = acceso.can("reportes", "exportar");
@@ -220,6 +221,7 @@ function Reportes() {
       return (data ?? []) as { id: string; name: string }[];
     },
   });
+
   const vinculado = useQuery({
     queryKey: ["reportes", "mi-empleado", acceso.userId],
     queryFn: async () => {
@@ -235,18 +237,29 @@ function Reportes() {
   });
   useEffect(() => setOrden(null), [reporteId]);
 
-  const filas = useMemo(() => ordenarFilas(datos.data ?? [], orden), [datos.data, orden]);
+  const filas = useMemo(() => {
+    let lista = datos.data ?? [];
+    if (busqueda.trim()) {
+      const q = busqueda.trim().toLowerCase();
+      lista = lista.filter((r) =>
+        Object.values(r).some((val) => String(val ?? "").toLowerCase().includes(q))
+      );
+    }
+    return ordenarFilas(lista, orden);
+  }, [datos.data, busqueda, orden]);
+
   const pag = usePaginado(filas, 20);
   const columnas = useMemo(() => Object.keys(datos.data?.[0] ?? {}), [datos.data]);
   const totales = useMemo(() => {
     const t: Record<string, number> = {};
     for (const c of columnas) {
       if (["documento", "dias_marcados"].includes(c) || c.startsWith("pct")) continue;
-      const nums = (datos.data ?? []).map((r) => r[c]).filter((v) => typeof v === "number") as number[];
-      if (nums.length && nums.length === (datos.data ?? []).length) t[c] = Math.round(nums.reduce((a, b) => a + b, 0) * 100) / 100;
+      const nums = filas.map((r) => r[c]).filter((v) => typeof v === "number") as number[];
+      if (nums.length && nums.length === filas.length) t[c] = Math.round(nums.reduce((a, b) => a + b, 0) * 100) / 100;
     }
     return t;
-  }, [datos.data, columnas]);
+  }, [filas, columnas]);
+
 
   // Qué alcance tiene quien consulta (la base de datos aplica el mismo límite)
   const alcanceTexto = acceso.isSuperAdmin || ["plataforma", "mi_empresa"].includes(acceso.scope)
@@ -385,6 +398,31 @@ function Reportes() {
                 <p className="ml-auto self-center text-xs text-muted-foreground">Tu rol no tiene permiso para descargar reportes.</p>
               )}
             </form>
+
+            {datos.data?.length ? (
+              <div className="mt-4 flex flex-wrap items-center gap-3 border-t pt-3">
+                <div className="relative min-w-64 flex-1">
+                  <Search className="pointer-events-none absolute left-2.5 top-1/2 size-4 -translate-y-1/2 text-muted-foreground" />
+                  <Input
+                    placeholder="Filtrar resultados por persona, documento, cargo o cualquier dato…"
+                    value={busqueda}
+                    onChange={(e) => setBusqueda(e.target.value)}
+                    className="h-9 pl-8 text-sm"
+                  />
+                </div>
+                {busqueda ? (
+                  <Button
+                    type="button"
+                    variant="ghost"
+                    size="sm"
+                    onClick={() => setBusqueda("")}
+                    className="h-9 text-xs text-muted-foreground hover:text-foreground"
+                  >
+                    <X className="mr-1 size-3.5" /> Limpiar
+                  </Button>
+                ) : null}
+              </div>
+            ) : null}
           </Card>
 
           {datos.isFetching ? (
@@ -394,7 +432,11 @@ function Reportes() {
           ) : (
             <>
               <div className="flex flex-wrap items-center gap-3 text-sm">
-                <span className="font-medium tabular-nums">{filas.length.toLocaleString("es-CO")} filas</span>
+                <span className="font-medium tabular-nums">
+                  {filas.length !== (datos.data?.length ?? 0)
+                    ? `${filas.length.toLocaleString("es-CO")} de ${(datos.data?.length ?? 0).toLocaleString("es-CO")} filas`
+                    : `${filas.length.toLocaleString("es-CO")} filas`}
+                </span>
                 {Object.entries(totales).slice(0, 6).map(([k, v]) => (
                   <span key={k} className="rounded-md bg-muted px-2 py-0.5 text-xs">{etiqueta(k)}: <strong className="tabular-nums">{fmt(v)}</strong></span>
                 ))}

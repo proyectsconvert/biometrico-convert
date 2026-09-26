@@ -12,8 +12,10 @@ import {
   Search,
   Trash2,
   Upload,
+  X,
   XCircle,
 } from "lucide-react";
+import { MultiSelectFilter } from "@/components/multi-select-filter";
 import { supabase } from "@/integrations/supabase/client";
 import { useAccess } from "@/lib/session";
 import { descargarCsv } from "@/lib/biometria";
@@ -121,6 +123,8 @@ function Novedades() {
   const puedeAprobar = acceso.can("novedades", "aprobar");
   const puedeEliminar = acceso.can("novedades", "eliminar");
   const [conExcluidos, setConExcluidos] = useState(false);
+  const [campanasSel, setCampanasSel] = useState<string[]>([]);
+  const [personasSel, setPersonasSel] = useState<string[]>([]);
 
   // Documentos del personal que no cuenta en reportes (seguridad, aseo, contratistas)
   const excluidos = useQuery({
@@ -132,8 +136,35 @@ function Novedades() {
     },
   });
 
+  const campanas = useQuery({
+    queryKey: ["campaigns", "opciones-nov"],
+    queryFn: async () => {
+      const { data } = await supabase.from("campaigns").select("id, name").order("name");
+      return (data ?? []) as { id: string; name: string }[];
+    },
+  });
+
+  const empleados = useQuery({
+    queryKey: ["empleados-opciones-nov"],
+    queryFn: async () => {
+      const { data } = await supabase
+        .from("employees")
+        .select("id, document, full_name, position")
+        .order("full_name")
+        .limit(3000);
+      return (data ?? []) as { id: string; document: string; full_name: string; position: string | null }[];
+    },
+  });
+
+  const opcionesCampanas = (campanas.data ?? []).map((c) => ({ value: c.name, label: c.name }));
+  const opcionesPersonas = (empleados.data ?? []).map((e) => ({
+    value: e.document,
+    label: e.full_name,
+    sublabel: `${e.document}${e.position ? ` · ${e.position}` : ""}`,
+  }));
+
   const entradas = useQuery({
-    queryKey: ["nov-entradas", desde, hasta, buscar],
+    queryKey: ["nov-entradas", desde, hasta, campanasSel, personasSel, buscar],
     queryFn: () =>
       traerTodo<Entrada>((a, b) => {
         let q = supabase
@@ -144,6 +175,8 @@ function Novedades() {
           .order("full_name")
           .order("work_date")
           .range(a, b);
+        if (campanasSel.length > 0) q = q.in("campaign_label", campanasSel);
+        if (personasSel.length > 0) q = q.in("document", personasSel);
         const t = buscar.trim();
         if (t) q = /^\d+$/.test(t) ? q.eq("document", t) : q.or(`full_name.ilike.%${t}%,campaign_label.ilike.%${t}%`);
         return q;
@@ -151,9 +184,11 @@ function Novedades() {
   });
 
   const totales = useQuery({
-    queryKey: ["nov-totales", desde, hasta, buscar],
+    queryKey: ["nov-totales", desde, hasta, campanasSel, personasSel, buscar],
     queryFn: async () => {
       let q = supabase.from("novelty_totals").select("*").lte("period_start", hasta).gte("period_end", desde).order("full_name").limit(1000);
+      if (campanasSel.length > 0) q = q.in("campaign_label", campanasSel);
+      if (personasSel.length > 0) q = q.in("document", personasSel);
       const t = buscar.trim();
       if (t) q = /^\d+$/.test(t) ? q.eq("document", t) : q.or(`full_name.ilike.%${t}%,campaign_label.ilike.%${t}%`);
       const { data, error } = await q;
@@ -275,7 +310,13 @@ function Novedades() {
       />
 
       <Card className="mb-4 p-4">
-        <form className="flex flex-wrap items-end gap-4" onSubmit={(e) => { e.preventDefault(); setBuscar(texto); }}>
+        <form
+          className="flex flex-wrap items-end gap-3"
+          onSubmit={(e) => {
+            e.preventDefault();
+            setBuscar(texto);
+          }}
+        >
           <div className="space-y-1.5">
             <Label htmlFor="desde">Desde</Label>
             <Input id="desde" type="date" value={desde} onChange={(e) => setDesde(e.target.value)} />
@@ -284,11 +325,62 @@ function Novedades() {
             <Label htmlFor="hasta">Hasta</Label>
             <Input id="hasta" type="date" value={hasta} onChange={(e) => setHasta(e.target.value)} />
           </div>
-          <div className="min-w-64 flex-1 space-y-1.5">
-            <Label htmlFor="q">Documento, nombre o campaña</Label>
-            <Input id="q" placeholder="Ej: 012345 o CONVERTIA" value={texto} onChange={(e) => setTexto(e.target.value)} />
+          <div className="space-y-1.5">
+            <Label>Campañas</Label>
+            <MultiSelectFilter
+              title="Campañas"
+              placeholder="Todas las campañas"
+              searchPlaceholder="Buscar campaña…"
+              options={opcionesCampanas}
+              selected={campanasSel}
+              onChange={setCampanasSel}
+              triggerClassName="w-48"
+            />
           </div>
-          <Button type="submit"><Search className="size-4" /> Buscar</Button>
+          <div className="space-y-1.5">
+            <Label>Personas</Label>
+            <MultiSelectFilter
+              title="Personas"
+              placeholder="Todas las personas"
+              searchPlaceholder="Buscar por cédula o nombre…"
+              options={opcionesPersonas}
+              selected={personasSel}
+              onChange={setPersonasSel}
+              triggerClassName="w-52"
+              popoverWidth="w-[340px]"
+            />
+          </div>
+          <div className="min-w-56 flex-1 space-y-1.5">
+            <Label htmlFor="q">Búsqueda libre</Label>
+            <div className="relative">
+              <Search className="absolute left-3 top-1/2 size-4 -translate-y-1/2 text-muted-foreground" />
+              <Input
+                id="q"
+                className="pl-9"
+                placeholder="Cédula, nombre, cargo o texto…"
+                value={texto}
+                onChange={(e) => setTexto(e.target.value)}
+              />
+            </div>
+          </div>
+          <div className="flex items-center gap-2">
+            <Button type="submit"><Search className="size-4" /> Filtrar</Button>
+            {(campanasSel.length > 0 || personasSel.length > 0 || Boolean(buscar) || conExcluidos) && (
+              <Button
+                type="button"
+                variant="ghost"
+                onClick={() => {
+                  setTexto("");
+                  setBuscar("");
+                  setCampanasSel([]);
+                  setPersonasSel([]);
+                  setConExcluidos(false);
+                }}
+              >
+                <X className="size-4 mr-1" /> Limpiar
+              </Button>
+            )}
+          </div>
           <label className="flex items-center gap-2 pb-2 text-sm">
             <Switch checked={conExcluidos} onCheckedChange={setConExcluidos} />
             Incluir personal excluido

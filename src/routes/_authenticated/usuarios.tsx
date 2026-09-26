@@ -390,7 +390,7 @@ function DatosUsuario({
 }: {
   perfil: Perfil;
   onCambio: () => void;
-  onSolicitarEliminar?: (perfil: Perfil) => void;
+  onSolicitarEliminar?: ((perfil: Perfil) => void) | undefined;
 }) {
   const acceso = useAccess();
   const actualizar = useServerFn(actualizarUsuario);

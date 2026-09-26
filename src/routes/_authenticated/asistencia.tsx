@@ -1,7 +1,7 @@
 import { createFileRoute } from "@tanstack/react-router";
 import { useEffect, useState } from "react";
 import { keepPreviousData, useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { ChevronDown, ChevronRight, Download, Loader2, RefreshCw, Search } from "lucide-react";
+import { ChevronDown, ChevronRight, Download, Loader2, RefreshCw, Search, X } from "lucide-react";
 import { toast } from "sonner";
 import { supabase } from "@/integrations/supabase/client";
 import { useServerFn } from "@tanstack/react-start";
@@ -19,6 +19,8 @@ import { Card } from "@/components/ui/card";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { cn } from "@/lib/utils";
 
+import { MultiSelectFilter } from "@/components/multi-select-filter";
+
 export const Route = createFileRoute("/_authenticated/asistencia")({
   head: () => ({ meta: [{ title: "Control diario — Convert-IA" }] }),
   component: Asistencia,
@@ -32,6 +34,7 @@ type Fila = {
   position: string | null;
   employer_name: string | null;
   campaign_name: string | null;
+  cost_center_name: string | null;
   shift_name: string | null;
   first_in: string | null;
   last_out: string | null;
@@ -59,10 +62,18 @@ type Evento = {
   is_duplicate: boolean;
 };
 
-type Filtros = { desde: string; hasta: string; texto: string; personal: string; estado: string };
+type Filtros = {
+  desde: string;
+  hasta: string;
+  texto: string;
+  personal: string;
+  estado: string;
+  campanas: string[];
+  personas: string[];
+};
 
 const COLUMNAS =
-  "id, work_date, document, full_name, position, employer_name, campaign_name, shift_name, first_in, last_out, worked_minutes, expected_minutes, late_minutes, overtime_minutes, night_minutes, sunday_holiday_minutes, is_rest_day, is_manual, status, en_reportes, stay_minutes, break_applied_minutes";
+  "id, work_date, document, full_name, position, employer_name, campaign_name, cost_center_name, shift_name, first_in, last_out, worked_minutes, expected_minutes, late_minutes, overtime_minutes, night_minutes, sunday_holiday_minutes, is_rest_day, is_manual, status, en_reportes, stay_minutes, break_applied_minutes";
 
 const ESTADOS: Record<string, { label: string; clase: string }> = {
   completa: { label: "Completa", clase: "bg-emerald-600 text-white hover:bg-emerald-600" },
@@ -86,15 +97,32 @@ function aplicarFiltros(q: any, f: Filtros) {
   else if (f.personal === "sin") q = q.is("employer_id", null);
   else if (f.personal !== "todos") q = q.eq("employer_id", f.personal);
   if (f.estado !== "todos") q = q.eq("status", f.estado);
+  if (f.campanas && f.campanas.length > 0) q = q.in("campaign_id", f.campanas);
+  if (f.personas && f.personas.length > 0) q = q.in("document", f.personas);
   const t = f.texto.trim();
-  if (t) q = /^\d+$/.test(t) ? q.eq("document", t) : q.ilike("full_name", `%${t.replace(/[%,()]/g, " ")}%`);
+  if (t) {
+    if (/^\d+$/.test(t)) {
+      q = q.eq("document", t);
+    } else {
+      const clean = t.replace(/[%,()]/g, " ").trim();
+      q = q.or(`full_name.ilike.%${clean}%,campaign_name.ilike.%${clean}%,position.ilike.%${clean}%`);
+    }
+  }
   return q;
 }
 
 function Asistencia() {
   const acceso = useAccess();
   const qc = useQueryClient();
-  const [f, setF] = useState<Filtros>({ desde: fechaLocal(), hasta: fechaLocal(), texto: "", personal: "reportes", estado: "todos" });
+  const [f, setF] = useState<Filtros>({
+    desde: fechaLocal(),
+    hasta: fechaLocal(),
+    texto: "",
+    personal: "reportes",
+    estado: "todos",
+    campanas: [],
+    personas: [],
+  });
   const [texto, setTexto] = useState("");
   const [pagina, setPagina] = useState(0);
   const [TAMANO, setTamano] = useState(50);
@@ -133,6 +161,33 @@ function Asistencia() {
       return (data ?? []) as { id: string; name: string }[];
     },
   });
+
+  const campanas = useQuery({
+    queryKey: ["campaigns", "opciones"],
+    queryFn: async () => {
+      const { data } = await dbAny.from("campaigns").select("id, name").order("name");
+      return (data ?? []) as { id: string; name: string }[];
+    },
+  });
+
+  const empleados = useQuery({
+    queryKey: ["empleados-opciones"],
+    queryFn: async () => {
+      const { data } = await dbAny
+        .from("employees")
+        .select("id, document, full_name, position")
+        .order("full_name")
+        .limit(3000);
+      return (data ?? []) as { id: string; document: string; full_name: string; position: string | null }[];
+    },
+  });
+
+  const opcionesCampanas = (campanas.data ?? []).map((c) => ({ value: c.id, label: c.name }));
+  const opcionesPersonas = (empleados.data ?? []).map((e) => ({
+    value: e.document,
+    label: e.full_name,
+    sublabel: `${e.document}${e.position ? ` · ${e.position}` : ""}`,
+  }));
 
   const lista = useQuery({
     queryKey: ["asistencia", "lista", f, pagina, TAMANO, orden],
@@ -195,6 +250,7 @@ function Asistencia() {
           empleado: x.full_name,
           empleador: x.employer_name ?? "",
           campana: x.campaign_name ?? "",
+          centro_costo: x.cost_center_name ?? "",
           turno: x.shift_name ?? "",
           entrada: hora(x.first_in),
           salida: hora(x.last_out),
@@ -215,6 +271,13 @@ function Asistencia() {
       setExportando(false);
     }
   }
+
+  const hayFiltrosActivos =
+    f.campanas.length > 0 ||
+    f.personas.length > 0 ||
+    f.personal !== "reportes" ||
+    f.estado !== "todos" ||
+    Boolean(f.texto);
 
   const r = resumen.data;
   const filas = lista.data?.filas ?? [];
@@ -254,23 +317,78 @@ function Asistencia() {
             <Input id="hasta" type="date" value={f.hasta} onChange={(e) => setF((p) => ({ ...p, hasta: e.target.value }))} />
           </div>
           <div className="space-y-1.5">
+            <Label>Campañas</Label>
+            <MultiSelectFilter
+              title="Campañas"
+              placeholder="Todas las campañas"
+              searchPlaceholder="Buscar campaña…"
+              options={opcionesCampanas}
+              selected={f.campanas}
+              onChange={(campanas) => setF((p) => ({ ...p, campanas }))}
+              triggerClassName="w-48"
+            />
+          </div>
+          <div className="space-y-1.5">
+            <Label>Personas</Label>
+            <MultiSelectFilter
+              title="Personas"
+              placeholder="Todas las personas"
+              searchPlaceholder="Buscar por cédula o nombre…"
+              options={opcionesPersonas}
+              selected={f.personas}
+              onChange={(personas) => setF((p) => ({ ...p, personas }))}
+              triggerClassName="w-52"
+              popoverWidth="w-[340px]"
+            />
+          </div>
+          <div className="space-y-1.5">
             <Label>Personal</Label>
             <Select value={f.personal} onValueChange={(v) => setF((p) => ({ ...p, personal: v }))}>
-              <SelectTrigger className="w-60"><SelectValue /></SelectTrigger>
+              <SelectTrigger className="w-48"><SelectValue /></SelectTrigger>
               <SelectContent>
-                <SelectItem value="reportes">Solo quienes cuentan en reportes</SelectItem>
-                <SelectItem value="todos">Todo el personal del biométrico</SelectItem>
-                <SelectItem value="excluidos">Excluidos (seguridad, aseo…)</SelectItem>
-                <SelectItem value="sin">Sin empleador asignado</SelectItem>
+                <SelectItem value="reportes">Solo en reportes</SelectItem>
+                <SelectItem value="todos">Todo el personal</SelectItem>
+                <SelectItem value="excluidos">Excluidos</SelectItem>
+                <SelectItem value="sin">Sin empleador</SelectItem>
                 {(empleadores.data ?? []).map((e) => <SelectItem key={e.id} value={e.id}>{e.name}</SelectItem>)}
               </SelectContent>
             </Select>
           </div>
           <div className="min-w-56 flex-1 space-y-1.5">
-            <Label htmlFor="q">Documento o nombre</Label>
-            <Input id="q" placeholder="Ej: 012345 o CONVERTIA" value={texto} onChange={(e) => setTexto(e.target.value)} />
+            <Label htmlFor="q">Búsqueda libre</Label>
+            <div className="relative">
+              <Search className="absolute left-3 top-1/2 size-4 -translate-y-1/2 text-muted-foreground" />
+              <Input
+                id="q"
+                className="pl-9"
+                placeholder="Cédula, nombre, cargo, etc."
+                value={texto}
+                onChange={(e) => setTexto(e.target.value)}
+              />
+            </div>
           </div>
-          <Button type="submit"><Search className="size-4" /> Buscar</Button>
+          <div className="flex items-center gap-2">
+            <Button type="submit"><Search className="size-4" /> Filtrar</Button>
+            {hayFiltrosActivos && (
+              <Button
+                type="button"
+                variant="ghost"
+                onClick={() => {
+                  setTexto("");
+                  setF((p) => ({
+                    ...p,
+                    texto: "",
+                    campanas: [],
+                    personas: [],
+                    personal: "reportes",
+                    estado: "todos",
+                  }));
+                }}
+              >
+                <X className="size-4 mr-1" /> Limpiar
+              </Button>
+            )}
+          </div>
         </form>
       </Card>
 
@@ -311,7 +429,11 @@ function Asistencia() {
             cell: (x) => (
               <div>
                 <p className="font-medium">{x.full_name}</p>
-                <p className="text-xs text-muted-foreground">{x.document}{x.campaign_name ? ` · ${x.campaign_name}` : ""}</p>
+                <p className="text-xs text-muted-foreground">
+                  {x.document}
+                  {x.campaign_name ? ` · ${x.campaign_name}` : ""}
+                  {x.cost_center_name ? ` · ${x.cost_center_name}` : ""}
+                </p>
               </div>
             ),
           },

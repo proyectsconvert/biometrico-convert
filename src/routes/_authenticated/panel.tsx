@@ -21,10 +21,12 @@ import {
   CalendarCheck,
   Clock3,
   Moon,
+  Search,
   Sun,
   TrendingUp,
   TriangleAlert,
   Users,
+  X,
 } from "lucide-react";
 import { supabase } from "@/integrations/supabase/client";
 import { useAccess } from "@/lib/session";
@@ -34,6 +36,8 @@ import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { cn } from "@/lib/utils";
+
+import { MultiSelectFilter } from "@/components/multi-select-filter";
 
 export const Route = createFileRoute("/_authenticated/panel")({
   head: () => ({ meta: [{ title: "Panel estratégico — Convert-IA" }] }),
@@ -78,7 +82,9 @@ function Panel() {
   const acceso = useAccess();
   const [hasta, setHasta] = useState(iso(new Date()));
   const [desde, setDesde] = useState(iso(new Date(Date.now() - 29 * 864e5)));
-  const [campana, setCampana] = useState("todas");
+  const [campanasSel, setCampanasSel] = useState<string[]>([]);
+  const [personasSel, setPersonasSel] = useState<string[]>([]);
+  const [busqueda, setBusqueda] = useState("");
   const [anclado, setAnclado] = useState(false);
 
   const campanas = useQuery({
@@ -89,14 +95,43 @@ function Panel() {
     },
   });
 
+  const empleados = useQuery({
+    queryKey: ["empleados-selector-panel"],
+    queryFn: async () => {
+      const { data } = await supabase
+        .from("employees")
+        .select("id, document, full_name, position")
+        .order("full_name")
+        .limit(3000);
+      return (data ?? []) as { id: string; document: string; full_name: string; position: string | null }[];
+    },
+  });
+
+  const opcionesCampanas = useMemo(
+    () => (campanas.data ?? []).map((c) => ({ value: c.id, label: c.name })),
+    [campanas.data]
+  );
+  const opcionesPersonas = useMemo(
+    () =>
+      (empleados.data ?? []).map((e) => ({
+        value: e.id,
+        label: e.full_name,
+        sublabel: `${e.document}${e.position ? ` · ${e.position}` : ""}`,
+      })),
+    [empleados.data]
+  );
+
   const bi = useQuery({
-    queryKey: ["panel-bi", desde, hasta, campana],
+    queryKey: ["panel-bi", desde, hasta, campanasSel, personasSel, busqueda],
     placeholderData: keepPreviousData,
     queryFn: async () => {
       const { data, error } = await supabase.rpc("panel_bi", {
         _desde: desde,
         _hasta: hasta,
-        ...(campana !== "todas" ? { _campaign: campana } : {}),
+        _campaigns: campanasSel.length > 0 ? campanasSel : null,
+        _cost_centers: null,
+        _employees: personasSel.length > 0 ? personasSel : null,
+        _search: busqueda.trim() ? busqueda.trim() : null,
       });
       if (error) throw error;
       return data as unknown as BI;
@@ -125,6 +160,18 @@ function Panel() {
     }
   };
 
+  const limpiarFiltros = () => {
+    setCampanasSel([]);
+    setPersonasSel([]);
+    setBusqueda("");
+    aplicarPreset("30");
+  };
+
+  const hayFiltrosActivos =
+    campanasSel.length > 0 ||
+    personasSel.length > 0 ||
+    Boolean(busqueda.trim());
+
   const k = d?.kpis;
   const cumplimiento = k ? pct(k.completas, k.jornadas) : 0;
   const cobertura = k ? pct(k.horas_trabajadas, k.horas_esperadas) : 0;
@@ -143,6 +190,33 @@ function Panel() {
     { nombre: "Sin marcación", valor: k.sin_marcacion, color: C3 },
   ] : [];
 
+  const campanasFiltradas = useMemo(() => {
+    let lista = d?.campanas ?? [];
+    if (busqueda.trim()) {
+      const q = busqueda.trim().toLowerCase();
+      lista = lista.filter((c) => c.campana.toLowerCase().includes(q));
+    }
+    return lista;
+  }, [d?.campanas, busqueda]);
+
+  const topTardeFiltrado = useMemo(() => {
+    let lista = d?.top_tarde ?? [];
+    if (busqueda.trim()) {
+      const q = busqueda.trim().toLowerCase();
+      lista = lista.filter((t) => `${t.nombre} ${t.documento} ${t.campana}`.toLowerCase().includes(q));
+    }
+    return lista;
+  }, [d?.top_tarde, busqueda]);
+
+  const topExtraFiltrado = useMemo(() => {
+    let lista = d?.top_extra ?? [];
+    if (busqueda.trim()) {
+      const q = busqueda.trim().toLowerCase();
+      lista = lista.filter((t) => `${t.nombre} ${t.documento} ${t.campana}`.toLowerCase().includes(q));
+    }
+    return lista;
+  }, [d?.top_extra, busqueda]);
+
   const alertas: { texto: string; tono: "alto" | "medio" }[] = [];
   if (k) {
     if (cumplimiento < 85 && k.jornadas) alertas.push({ texto: `Solo el ${n(cumplimiento, 1)}% de las jornadas están completas. Revisa marcaciones incompletas y la clasificación de dispositivos.`, tono: "alto" });
@@ -157,32 +231,74 @@ function Panel() {
       {/* Encabezado */}
       <div className="relative overflow-hidden rounded-2xl bg-sidebar p-6 text-sidebar-foreground">
         <div className="pointer-events-none absolute -right-20 -top-24 size-72 rounded-full bg-brand-gradient opacity-25 blur-3xl" />
-        <div className="relative flex flex-wrap items-end justify-between gap-4">
-          <div>
-            <p className="text-xs uppercase tracking-widest text-sidebar-foreground/60">Panel estratégico</p>
-            <h1 className="font-display text-2xl font-semibold md:text-3xl">
-              Hola, {acceso.fullName.split(" ")[0]}. <span className="text-brand-gradient">Así va tu operación.</span>
-            </h1>
-            <p className="mt-1 text-sm text-sidebar-foreground/60">
-              {acceso.tenantName ?? "Plataforma"} · {desde} → {hasta}
-              {d?.rango.max ? ` · último dato ${d.rango.max}` : ""}
-            </p>
+        <div className="relative flex flex-col gap-4">
+          <div className="flex flex-wrap items-end justify-between gap-4">
+            <div>
+              <p className="text-xs uppercase tracking-widest text-sidebar-foreground/60">Panel estratégico</p>
+              <h1 className="font-display text-2xl font-semibold md:text-3xl">
+                Hola, {acceso.fullName.split(" ")[0]}. <span className="text-brand-gradient">Así va tu operación.</span>
+              </h1>
+              <p className="mt-1 text-sm text-sidebar-foreground/60">
+                {acceso.tenantName ?? "Plataforma"} · {desde} → {hasta}
+                {d?.rango.max ? ` · último dato ${d.rango.max}` : ""}
+              </p>
+            </div>
+            <div className="flex flex-wrap items-center gap-1.5">
+              {PRESETS.map((p) => (
+                <Button key={p.id} size="sm" variant="ghost" className="h-8 text-xs text-sidebar-foreground/80 hover:bg-sidebar-accent hover:text-sidebar-accent-foreground" onClick={() => aplicarPreset(p.id)}>
+                  {p.label}
+                </Button>
+              ))}
+              <Input type="date" value={desde} onChange={(e) => setDesde(e.target.value)} className="h-8 w-36 border-sidebar-border bg-sidebar-accent/40 text-xs text-sidebar-foreground" />
+              <Input type="date" value={hasta} onChange={(e) => setHasta(e.target.value)} className="h-8 w-36 border-sidebar-border bg-sidebar-accent/40 text-xs text-sidebar-foreground" />
+            </div>
           </div>
-          <div className="flex flex-wrap items-center gap-2">
-            {PRESETS.map((p) => (
-              <Button key={p.id} size="sm" variant="ghost" className="text-sidebar-foreground/80 hover:bg-sidebar-accent hover:text-sidebar-accent-foreground" onClick={() => aplicarPreset(p.id)}>
-                {p.label}
+
+          {/* Filtros avanzados: Campañas, Centros de costo, Personas y Buscador de texto */}
+          <div className="flex flex-wrap items-center gap-2 pt-2 border-t border-sidebar-border/40">
+            <MultiSelectFilter
+              title="Campañas"
+              placeholder="Todas las campañas"
+              searchPlaceholder="Buscar campaña…"
+              options={opcionesCampanas}
+              selected={campanasSel}
+              onChange={setCampanasSel}
+              triggerClassName="h-8 border-sidebar-border bg-sidebar-accent/40 text-xs text-sidebar-foreground hover:bg-sidebar-accent hover:text-sidebar-accent-foreground min-w-[170px]"
+            />
+
+            <MultiSelectFilter
+              title="Personas"
+              placeholder="Todas las personas"
+              searchPlaceholder="Buscar por cédula o nombre…"
+              options={opcionesPersonas}
+              selected={personasSel}
+              onChange={setPersonasSel}
+              triggerClassName="h-8 border-sidebar-border bg-sidebar-accent/40 text-xs text-sidebar-foreground hover:bg-sidebar-accent hover:text-sidebar-accent-foreground min-w-[180px]"
+              popoverWidth="w-[340px]"
+            />
+
+            <div className="relative min-w-52 flex-1">
+              <Search className="pointer-events-none absolute left-2.5 top-1/2 size-3.5 -translate-y-1/2 text-sidebar-foreground/50" />
+              <Input
+                placeholder="Búsqueda libre (cédula, nombre, cargo)…"
+                value={busqueda}
+                onChange={(e) => setBusqueda(e.target.value)}
+                className="h-8 pl-8 text-xs border-sidebar-border bg-sidebar-accent/40 text-sidebar-foreground placeholder:text-sidebar-foreground/40"
+              />
+            </div>
+
+            {hayFiltrosActivos ? (
+              <Button
+                type="button"
+                size="sm"
+                variant="ghost"
+                onClick={limpiarFiltros}
+                className="h-8 text-xs text-sidebar-foreground/70 hover:bg-sidebar-accent hover:text-sidebar-accent-foreground"
+                title="Limpiar filtros"
+              >
+                <X className="mr-1 size-3.5" /> Limpiar
               </Button>
-            ))}
-            <Input type="date" value={desde} onChange={(e) => setDesde(e.target.value)} className="h-8 w-36 border-sidebar-border bg-sidebar-accent/40 text-sidebar-foreground" />
-            <Input type="date" value={hasta} onChange={(e) => setHasta(e.target.value)} className="h-8 w-36 border-sidebar-border bg-sidebar-accent/40 text-sidebar-foreground" />
-            <Select value={campana} onValueChange={setCampana}>
-              <SelectTrigger className="h-8 w-44 border-sidebar-border bg-sidebar-accent/40 text-sidebar-foreground"><SelectValue /></SelectTrigger>
-              <SelectContent>
-                <SelectItem value="todas">Todas las campañas</SelectItem>
-                {(campanas.data ?? []).map((c) => <SelectItem key={c.id} value={c.id}>{c.name}</SelectItem>)}
-              </SelectContent>
-            </Select>
+            ) : null}
           </div>
         </div>
 
@@ -291,7 +407,7 @@ function Panel() {
             <table className="w-full text-sm">
               <thead><tr className="text-left text-xs text-muted-foreground"><th className="pb-2 font-medium">Campaña</th><th className="pb-2 font-medium">Personas</th><th className="pb-2 font-medium">Jornadas</th><th className="w-56 pb-2 font-medium">Cumplimiento</th><th className="pb-2 font-medium">H. extra</th><th className="pb-2 font-medium">Tardanzas</th></tr></thead>
               <tbody>
-                {(d?.campanas ?? []).map((c) => (
+                {campanasFiltradas.map((c) => (
                   <tr key={c.campana} className="border-t">
                     <td className="py-2 font-medium">{c.campana}</td>
                     <td className="py-2 tabular-nums">{n(c.personas)}</td>
@@ -306,7 +422,13 @@ function Panel() {
                     <td className="py-2 tabular-nums">{n(c.tarde)}</td>
                   </tr>
                 ))}
-                {!d?.campanas.length ? <tr><td colSpan={6} className="py-6 text-center text-muted-foreground">Sin datos en el periodo.</td></tr> : null}
+                {!campanasFiltradas.length ? (
+                  <tr>
+                    <td colSpan={6} className="py-6 text-center text-muted-foreground">
+                      {busqueda.trim() ? "No hay resultados para este filtro." : "Sin datos en el periodo."}
+                    </td>
+                  </tr>
+                ) : null}
               </tbody>
             </table>
           </div>
@@ -369,8 +491,16 @@ function Panel() {
 
       {/* Rankings */}
       <div className="grid gap-4 lg:grid-cols-2">
-        <Ranking titulo="Mayor tiempo de llegada tarde" icon={AlarmClock} filas={(d?.top_tarde ?? []).map((t) => ({ nombre: t.nombre, sub: `${t.documento} · ${t.campana}`, valor: `${n(t.minutos / 60, 1)} h`, extra: `${t.veces} veces` }))} />
-        <Ranking titulo="Mayor número de horas extra" icon={Activity} filas={(d?.top_extra ?? []).map((t) => ({ nombre: t.nombre, sub: `${t.documento} · ${t.campana}`, valor: `${n(t.horas, 1)} h` }))} />
+        <Ranking
+          titulo="Mayor tiempo de llegada tarde"
+          icon={AlarmClock}
+          filas={topTardeFiltrado.map((t) => ({ nombre: t.nombre, sub: `${t.documento} · ${t.campana}`, valor: `${n(t.minutos / 60, 1)} h`, extra: `${t.veces} veces` }))}
+        />
+        <Ranking
+          titulo="Mayor número de horas extra"
+          icon={Activity}
+          filas={topExtraFiltrado.map((t) => ({ nombre: t.nombre, sub: `${t.documento} · ${t.campana}`, valor: `${n(t.horas, 1)} h` }))}
+        />
       </div>
       {bi.isFetching && !bi.isLoading ? <p className="text-center text-xs text-muted-foreground">Actualizando…</p> : null}
       {bi.error ? <p className="text-center text-sm text-destructive">{(bi.error as Error).message}</p> : null}

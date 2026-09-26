@@ -1,7 +1,7 @@
 import { createFileRoute } from "@tanstack/react-router";
 import { useEffect, useState } from "react";
 import { keepPreviousData, useQuery } from "@tanstack/react-query";
-import { Download } from "lucide-react";
+import { Download, Loader2, Search, X } from "lucide-react";
 import { dbAny } from "@/lib/db";
 import { useAccess } from "@/lib/session";
 import { descargarCsv } from "@/lib/biometria";
@@ -13,8 +13,11 @@ import { Card } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Switch } from "@/components/ui/switch";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+import { MultiSelectFilter } from "@/components/multi-select-filter";
 
 export const Route = createFileRoute("/_authenticated/marcaciones")({
+  head: () => ({ meta: [{ title: "Marcaciones — Convert-IA" }] }),
   component: Marcaciones,
 });
 
@@ -29,20 +32,60 @@ type Evento = {
   is_attendance: boolean;
   is_duplicate: boolean;
   employer_name: string | null;
+  campaign_id: string | null;
+  campaign_name: string | null;
+  cost_center_name: string | null;
   en_reportes: boolean;
 };
 
 const hoy = () => new Date().toISOString().slice(0, 10);
 
+const COLS =
+  "id, event_at, device_name, door, document, biometric_name, event_type, is_attendance, is_duplicate, employer_name, campaign_id, campaign_name, cost_center_name, en_reportes";
+
 function Marcaciones() {
   const acceso = useAccess();
-  const [fecha, setFecha] = useState(hoy());
-  const [documento, setDocumento] = useState("");
+  const [desde, setDesde] = useState(hoy());
+  const [hasta, setHasta] = useState(hoy());
+  const [campanasSel, setCampanasSel] = useState<string[]>([]);
+  const [personasSel, setPersonasSel] = useState<string[]>([]);
+  const [texto, setTexto] = useState("");
+  const [busqueda, setBusqueda] = useState("");
   const [soloValidas, setSoloValidas] = useState(true);
   const [conExcluidos, setConExcluidos] = useState(false);
   const [anclado, setAnclado] = useState(false);
+  const [exportando, setExportando] = useState(false);
 
-  // Abrir en el último día con eventos, no en «hoy»
+  // Cargar campañas para selector
+  const campanas = useQuery({
+    queryKey: ["campaigns", "opciones"],
+    queryFn: async () => {
+      const { data } = await dbAny.from("campaigns").select("id, name").order("name");
+      return (data ?? []) as { id: string; name: string }[];
+    },
+  });
+
+  // Cargar empleados para selector de personas
+  const empleados = useQuery({
+    queryKey: ["empleados-opciones"],
+    queryFn: async () => {
+      const { data } = await dbAny
+        .from("employees")
+        .select("id, document, full_name, position")
+        .order("full_name")
+        .limit(3000);
+      return (data ?? []) as { id: string; document: string; full_name: string; position: string | null }[];
+    },
+  });
+
+  const opcionesCampanas = (campanas.data ?? []).map((c) => ({ value: c.id, label: c.name }));
+  const opcionesPersonas = (empleados.data ?? []).map((e) => ({
+    value: e.document,
+    label: e.full_name,
+    sublabel: `${e.document}${e.position ? ` · ${e.position}` : ""}`,
+  }));
+
+  // Abrir en el último día con eventos
   const ultimo = useQuery({
     queryKey: ["marcaciones", "ultimo-dia"],
     queryFn: async () => {
@@ -50,31 +93,45 @@ function Marcaciones() {
       return ((data?.[0] as { event_at?: string } | undefined)?.event_at ?? "").slice(0, 10) || null;
     },
   });
+
   useEffect(() => {
     if (anclado || !ultimo.isSuccess) return;
     setAnclado(true);
-    if (ultimo.data) setFecha(ultimo.data);
+    if (ultimo.data) {
+      setDesde(ultimo.data);
+      setHasta(ultimo.data);
+    }
   }, [anclado, ultimo.isSuccess, ultimo.data]);
 
   const [pagina, setPagina] = useState(0);
   const [tamano, setTamano] = useState(50);
-  useEffect(() => setPagina(0), [fecha, documento, soloValidas, conExcluidos]);
+
+  useEffect(() => {
+    setPagina(0);
+  }, [desde, hasta, campanasSel, personasSel, busqueda, soloValidas, conExcluidos]);
 
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const filtrar = (q: any) => {
-    q = q.gte("event_at", `${fecha}T00:00:00`).lte("event_at", `${fecha}T23:59:59`);
+    q = q.gte("event_at", `${desde}T00:00:00`).lte("event_at", `${hasta}T23:59:59`);
     if (soloValidas) q = q.eq("is_attendance", true);
-    // El personal de empleadores excluidos (seguridad, aseo…) solo se ve si se pide
     if (!conExcluidos) q = q.eq("en_reportes", true);
-    const t = documento.trim();
-    if (t) q = /^\d+$/.test(t) ? q.eq("document", t) : q.ilike("biometric_name", `%${t.replace(/[%,()]/g, " ")}%`);
+    if (campanasSel.length > 0) q = q.in("campaign_id", campanasSel);
+    if (personasSel.length > 0) q = q.in("document", personasSel);
+
+    const t = busqueda.trim();
+    if (t) {
+      if (/^\d+$/.test(t)) {
+        q = q.eq("document", t);
+      } else {
+        const clean = t.replace(/[%,()]/g, " ").trim();
+        q = q.or(`biometric_name.ilike.%${clean}%,campaign_name.ilike.%${clean}%,device_name.ilike.%${clean}%,door.ilike.%${clean}%`);
+      }
+    }
     return q;
   };
-  const COLS =
-    "id, event_at, device_name, door, document, biometric_name, event_type, is_attendance, is_duplicate, employer_name, en_reportes";
 
   const lista = useQuery({
-    queryKey: ["marcaciones", fecha, documento, soloValidas, conExcluidos, pagina, tamano],
+    queryKey: ["marcaciones", desde, hasta, campanasSel, personasSel, busqueda, soloValidas, conExcluidos, pagina, tamano],
     enabled: anclado,
     placeholderData: keepPreviousData,
     queryFn: async () => {
@@ -86,68 +143,145 @@ function Marcaciones() {
     },
   });
 
-  // Exporta todo el día filtrado, no solo la página visible
+  const hayFiltrosActivos =
+    campanasSel.length > 0 ||
+    personasSel.length > 0 ||
+    Boolean(busqueda) ||
+    !soloValidas ||
+    conExcluidos;
+
+  // Exporta el rango filtrado
   async function exportar() {
-    const todas: Evento[] = [];
-    for (let i = 0; i < 100; i++) {
-      const { data, error } = await filtrar(dbAny.from("marcaciones_reporte").select(COLS))
-        .order("event_at", { ascending: false })
-        .range(i * 1000, i * 1000 + 999);
-      if (error) throw error;
-      todas.push(...((data ?? []) as Evento[]));
-      if (!data || data.length < 1000) break;
+    setExportando(true);
+    try {
+      const todas: Evento[] = [];
+      for (let i = 0; i < 100; i++) {
+        const { data, error } = await filtrar(dbAny.from("marcaciones_reporte").select(COLS))
+          .order("event_at", { ascending: false })
+          .range(i * 1000, i * 1000 + 999);
+        if (error) throw error;
+        todas.push(...((data ?? []) as Evento[]));
+        if (!data || data.length < 1000) break;
+      }
+      descargarCsv(
+        `marcaciones_${desde}_${hasta}`,
+        todas.map((e) => ({
+          fecha_hora: e.event_at.replace("T", " "),
+          documento: e.document ?? "",
+          nombre: e.biometric_name ?? "",
+          campana: e.campaign_name ?? "",
+          centro_costo: e.cost_center_name ?? "",
+          empleador: e.employer_name ?? "",
+          dispositivo: e.device_name ?? "",
+          puerta: e.door ?? "",
+          evento: e.event_type,
+          cuenta_asistencia: e.is_attendance ? "Sí" : "No",
+          duplicada: e.is_duplicate ? "Sí" : "No",
+        })),
+      );
+    } finally {
+      setExportando(false);
     }
-    descargarCsv(
-      `marcaciones_${fecha}`,
-      todas.map((e) => ({
-        fecha_hora: e.event_at.replace("T", " "),
-        documento: e.document ?? "",
-        nombre: e.biometric_name ?? "",
-        empleador: e.employer_name ?? "",
-        dispositivo: e.device_name ?? "",
-        puerta: e.door ?? "",
-        evento: e.event_type,
-        cuenta_asistencia: e.is_attendance ? "Sí" : "No",
-        duplicada: e.is_duplicate ? "Sí" : "No",
-      })),
-    );
   }
 
   return (
     <div>
       <PageHeader
         titulo="Marcaciones"
-        descripcion="Historial completo de eventos del biométrico, incluidos los que no cuentan como asistencia."
+        descripcion="Historial completo de eventos del biométrico, filtrable por campaña, fechas, persona, centro de costo y dispositivo."
         acciones={
           acceso.can("marcaciones", "exportar") ? (
-            <Button variant="outline" onClick={() => void exportar()} disabled={!lista.data?.total}>
-              <Download className="size-4" /> Exportar
+            <Button variant="outline" onClick={() => void exportar()} disabled={exportando || !lista.data?.total}>
+              {exportando ? <Loader2 className="size-4 animate-spin" /> : <Download className="size-4" />} Exportar
             </Button>
           ) : null
         }
       />
 
-      <Card className="mb-4 flex flex-wrap items-end gap-4 p-4">
-        <div className="space-y-1.5">
-          <Label htmlFor="fecha">Fecha</Label>
-          <Input id="fecha" type="date" value={fecha} onChange={(e) => setFecha(e.target.value)} />
-        </div>
-        <div className="space-y-1.5">
-          <Label htmlFor="doc">Documento o nombre</Label>
-          <Input
-            id="doc"
-            placeholder="Todos"
-            value={documento}
-            onChange={(e) => setDocumento(e.target.value)}
-          />
-        </div>
-        <div className="flex items-center gap-2 pb-2">
-          <Switch id="validas" checked={soloValidas} onCheckedChange={setSoloValidas} />
-          <Label htmlFor="validas">Solo marcaciones válidas</Label>
-        </div>
-        <div className="flex items-center gap-2 pb-2">
-          <Switch id="excluidos" checked={conExcluidos} onCheckedChange={setConExcluidos} />
-          <Label htmlFor="excluidos">Incluir personal excluido (seguridad, aseo…)</Label>
+      <Card className="mb-4 p-4">
+        <form
+          className="flex flex-wrap items-end gap-3"
+          onSubmit={(e) => {
+            e.preventDefault();
+            setBusqueda(texto);
+          }}
+        >
+          <div className="space-y-1.5">
+            <Label htmlFor="desde">Desde</Label>
+            <Input id="desde" type="date" value={desde} onChange={(e) => setDesde(e.target.value)} />
+          </div>
+          <div className="space-y-1.5">
+            <Label htmlFor="hasta">Hasta</Label>
+            <Input id="hasta" type="date" value={hasta} onChange={(e) => setHasta(e.target.value)} />
+          </div>
+          <div className="space-y-1.5">
+            <Label>Campañas</Label>
+            <MultiSelectFilter
+              title="Campañas"
+              placeholder="Todas las campañas"
+              searchPlaceholder="Buscar campaña…"
+              options={opcionesCampanas}
+              selected={campanasSel}
+              onChange={setCampanasSel}
+              triggerClassName="w-48"
+            />
+          </div>
+          <div className="space-y-1.5">
+            <Label>Personas</Label>
+            <MultiSelectFilter
+              title="Personas"
+              placeholder="Todas las personas"
+              searchPlaceholder="Buscar por cédula o nombre…"
+              options={opcionesPersonas}
+              selected={personasSel}
+              onChange={setPersonasSel}
+              triggerClassName="w-52"
+              popoverWidth="w-[340px]"
+            />
+          </div>
+          <div className="min-w-56 flex-1 space-y-1.5">
+            <Label htmlFor="q">Búsqueda libre</Label>
+            <div className="relative">
+              <Search className="absolute left-3 top-1/2 size-4 -translate-y-1/2 text-muted-foreground" />
+              <Input
+                id="q"
+                className="pl-9"
+                placeholder="Cédula, nombre, dispositivo, puerta…"
+                value={texto}
+                onChange={(e) => setTexto(e.target.value)}
+              />
+            </div>
+          </div>
+          <div className="flex items-center gap-2">
+            <Button type="submit"><Search className="size-4" /> Filtrar</Button>
+            {hayFiltrosActivos && (
+              <Button
+                type="button"
+                variant="ghost"
+                onClick={() => {
+                  setTexto("");
+                  setBusqueda("");
+                  setCampanasSel([]);
+                  setPersonasSel([]);
+                  setSoloValidas(true);
+                  setConExcluidos(false);
+                }}
+              >
+                <X className="size-4 mr-1" /> Limpiar
+              </Button>
+            )}
+          </div>
+        </form>
+
+        <div className="mt-3 flex flex-wrap items-center gap-6 border-t pt-3">
+          <div className="flex items-center gap-2">
+            <Switch id="validas" checked={soloValidas} onCheckedChange={setSoloValidas} />
+            <Label htmlFor="validas" className="cursor-pointer text-xs">Solo marcaciones válidas (asistencia)</Label>
+          </div>
+          <div className="flex items-center gap-2">
+            <Switch id="excluidos" checked={conExcluidos} onCheckedChange={setConExcluidos} />
+            <Label htmlFor="excluidos" className="cursor-pointer text-xs">Incluir personal excluido (seguridad, aseo…)</Label>
+          </div>
         </div>
       </Card>
 
@@ -157,14 +291,18 @@ function Marcaciones() {
         getKey={(f) => String(f.id)}
         vacio="No hay eventos para los filtros seleccionados."
         columnas={[
-          { key: "hora", header: "Fecha y hora", cell: (f) => f.event_at.replace("T", " ") },
+          { key: "hora", header: "Fecha y hora", cell: (f) => f.event_at.replace("T", " ").slice(0, 19) },
           {
             key: "persona",
             header: "Persona",
             cell: (f) => (
               <div>
                 <p className="font-medium">{f.biometric_name ?? "—"}</p>
-                <p className="text-xs text-muted-foreground">{f.document ?? "sin documento"}</p>
+                <p className="text-xs text-muted-foreground">
+                  {f.document ?? "sin documento"}
+                  {f.campaign_name ? ` · ${f.campaign_name}` : ""}
+                  {f.cost_center_name ? ` · ${f.cost_center_name}` : ""}
+                </p>
               </div>
             ),
           },
@@ -177,7 +315,16 @@ function Marcaciones() {
               </span>
             ),
           },
-          { key: "disp", header: "Dispositivo", cell: (f) => f.device_name ?? "—" },
+          {
+            key: "disp",
+            header: "Dispositivo y puerta",
+            cell: (f) => (
+              <div className="text-xs">
+                <p className="font-medium">{f.device_name ?? "—"}</p>
+                {f.door && <p className="text-muted-foreground">{f.door}</p>}
+              </div>
+            ),
+          },
           { key: "evento", header: "Evento", cell: (f) => f.event_type },
           {
             key: "estado",
@@ -186,7 +333,7 @@ function Marcaciones() {
               f.is_duplicate ? (
                 <Badge variant="secondary">duplicada</Badge>
               ) : f.is_attendance ? (
-                <Badge>válida</Badge>
+                <Badge className="bg-emerald-600 text-white hover:bg-emerald-600">válida</Badge>
               ) : (
                 <Badge variant="outline">historial</Badge>
               ),
