@@ -1,0 +1,2 @@
+create policy "biometrico lectura" on storage.objects for select to authenticated using (bucket_id = 'biometrico');
+create policy "biometrico carga" on storage.objects for insert to authenticated with check (bucket_id = 'biometrico');
