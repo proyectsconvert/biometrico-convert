@@ -17,6 +17,16 @@ try {
   // .env file not present or already in environment
 }
 
+// Reprocesos del histórico: se retoman solos tras un reinicio o cuando toca su reintento automático
+if (
+  typeof process !== "undefined" &&
+  (process.env["NODE_ENV"] === "production" || process.env["REPROCESO_VIGILANTE"] === "1")
+) {
+  void import("./lib/reproceso.server")
+    .then((m: { vigilarReprocesos: () => void }) => m.vigilarReprocesos())
+    .catch((e) => console.error("[reproceso] no se pudo iniciar el vigilante", e));
+}
+
 type ServerEntry = {
   fetch: (request: Request, env: unknown, ctx: unknown) => Promise<Response> | Response;
 };
