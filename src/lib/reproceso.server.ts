@@ -248,15 +248,26 @@ async function contarCrudo(importId: string): Promise<number> {
   return Number(r[0]?.n ?? 0);
 }
 
-/** Relee un archivo y reemplaza su capa cruda; queda marcado incompleto (rows_raw = 0) hasta verificarlo. */
-async function recargarArchivo(imp: Import, directaOk: boolean) {
+/**
+ * Lee el archivo original y lo compara con su capa cruda (no se confía en contadores guardados).
+ * Si no coincide, o si se pidió releer todo, reemplaza la capa cruda con lo leído; mientras tanto el
+ * archivo queda marcado incompleto (rows_raw = 0) para que ningún tramo se reconstruya sin él.
+ */
+async function verificarORecargar(imp: Import, directaOk: boolean, releerTodo: boolean) {
   const db = clienteApi();
+  const filas = await descargarYLeer(imp);
+  if (!filas.length) throw new Error("El archivo no contiene marcaciones legibles");
+  if (!releerTodo && (await contarCrudo(imp.id)) === filas.length) {
+    await db
+      .from("biometric_imports")
+      .update({ rows_raw: filas.length, rows_found: filas.length })
+      .eq("id", imp.id);
+    return { filas: filas.length, releido: false };
+  }
   await db
     .from("biometric_imports")
     .update({ rows_raw: 0, status: "procesando", error_message: null })
     .eq("id", imp.id);
-  const filas = await descargarYLeer(imp);
-  if (!filas.length) throw new Error("El archivo no contiene marcaciones legibles");
   const sql = await directa();
   if (sql) await sql`delete from public.biometric_raw where import_id = ${imp.id}`;
   else {
@@ -296,7 +307,7 @@ async function recargarArchivo(imp: Import, directaOk: boolean) {
     .from("biometric_imports")
     .update({ rows_raw: n, rows_found: n, error_message: null })
     .eq("id", imp.id);
-  return n;
+  return { filas: n, releido: true };
 }
 
 /** Tramos de días consecutivos según las filas crudas (los días enormes se parten por horas). */
@@ -435,13 +446,15 @@ export async function ejecutarReproceso(id: string) {
     t.fase = "Verificando la capa cruda de cada archivo";
     t.detalle = `${imps.length} archivos`;
     await guardar(t, true);
+    // El conteo global solo lo usa la verificación; el reproceso compara archivo por archivo
     const conteo = new Map(
-      (
-        await filasDe<{ import_id: string; filas: number | string }>(
-          "select import_id, count(*) as filas from public.biometric_raw where tenant_id = $1 group by import_id",
-          [t.tenant_id],
-          () => db.rpc("conteo_crudo_por_archivo", { _tenant: t.tenant_id }),
-        )
+      (t.modo !== "verificar"
+        ? []
+        : await filasDe<{ import_id: string; filas: number | string }>(
+            "select import_id, count(*) as filas from public.biometric_raw where tenant_id = $1 group by import_id",
+            [t.tenant_id],
+            () => db.rpc("conteo_crudo_por_archivo", { _tenant: t.tenant_id }),
+          )
       ).map((r) => [r.import_id, Number(r.filas)]),
     );
 
@@ -496,38 +509,47 @@ export async function ejecutarReproceso(id: string) {
       return;
     }
 
-    // 2. Capa cruda: releer lo incompleto (o todo, si se pidió)
+    // 2. Capa cruda: cada archivo se compara con su original y se repara si le falta algo
     for (const imp of imps) {
-      const completo =
-        (conteo.get(imp.id) ?? 0) > 0 && (conteo.get(imp.id) ?? 0) === (imp.rows_found ?? -1);
       const prev = t.archivos[imp.id];
       if (prev?.estado === "ok") continue;
-      if (t.releer_todo || !completo)
-        t.archivos[imp.id] = {
-          nombre: imp.filename,
-          estado: "pendiente",
-          intentos: prev?.intentos ?? 0,
-        };
+      t.archivos[imp.id] = {
+        nombre: imp.filename,
+        estado: "pendiente",
+        intentos: prev?.intentos ?? 0,
+      };
     }
+    let releidos = Object.values(t.archivos).filter(
+      (a) => a.estado === "ok" && a.error === "releido",
+    ).length;
     const cola = imps.filter((i) => t.archivos[i.id] && t.archivos[i.id]!.estado !== "ok");
     if (cola.length) {
-      t.fase = "Leyendo los archivos originales (capa cruda)";
+      t.fase = t.releer_todo
+        ? "Leyendo los archivos originales (capa cruda)"
+        : "Comparando cada archivo con su original y reparando";
       t.total = cola.length;
       t.hechos = 0;
       await guardar(t, true);
       const procesar = async (imp: Import, intentos: number) => {
         const a = t.archivos[imp.id]!;
         try {
-          const n = await conReintentos(
+          const res = await conReintentos(
             t,
             imp.filename,
             async () => {
               a.intentos++;
-              return recargarArchivo(imp, Boolean(sql));
+              return verificarORecargar(imp, Boolean(sql), t.releer_todo);
             },
             intentos,
           );
-          t.archivos[imp.id] = { ...a, estado: "ok", filas: n, error: undefined as never };
+          if (res.releido) releidos++;
+          // «releido» queda como marca para el resumen (no es un error)
+          t.archivos[imp.id] = {
+            ...a,
+            estado: "ok",
+            filas: res.filas,
+            ...(res.releido ? { error: "releido" } : {}),
+          };
         } catch (e) {
           if (e instanceof Cancelado) throw e;
           t.archivos[imp.id] = { ...a, estado: "error", error: (e as Error).message };
@@ -634,7 +656,7 @@ export async function ejecutarReproceso(id: string) {
     t.resultado = {
       ...cierre,
       archivos: imps.length,
-      releidos: cola.length,
+      releidos,
       tramos: t.tramos.length,
       sin_capa_cruda: sinCrudo,
       conexion: t.conexion,
