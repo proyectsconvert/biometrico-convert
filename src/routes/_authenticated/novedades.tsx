@@ -3,20 +3,25 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
 import {
+  CalendarPlus,
   CheckCircle2,
   Download,
   FileSpreadsheet,
   Loader2,
-  Plus,
   RefreshCw,
   Search,
+  Timer,
   Trash2,
   Upload,
   X,
   XCircle,
 } from "lucide-react";
 import { MultiSelectFilter } from "@/components/multi-select-filter";
-import { useFiltroCampanaPersonas } from "@/lib/filtro-personas";
+import { useEmpleadosFiltro, useFiltroCampanaPersonas } from "@/lib/filtro-personas";
+import { HiloComentarios } from "@/components/comentarios-empleado";
+import { HistorialCambios } from "@/components/historial-cambios";
+import { descargarPlantillaNovedades } from "@/lib/plantilla-novedades";
+import { todas } from "@/lib/turnos";
 import { supabase } from "@/integrations/supabase/client";
 import { useAccess } from "@/lib/session";
 import { descargarCsv } from "@/lib/biometria";
@@ -31,6 +36,8 @@ import {
 } from "@/lib/novedades";
 import { PageHeader } from "@/components/app-shell";
 import { ConciliacionNovedades } from "@/components/conciliacion-novedades";
+import { ResumenNovedades, type EntradaResumen, type TotalResumen } from "@/components/resumen-novedades";
+import { RegistrarDias, ReportarHoras } from "@/components/registrar-novedades";
 import { SimpleTable, Paginador, usePaginado } from "@/components/simple-table";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
@@ -115,7 +122,8 @@ function Novedades() {
   const [texto, setTexto] = useState("");
   const [buscar, setBuscar] = useState("");
   const [cargaAbierta, setCargaAbierta] = useState(false);
-  const [manualAbierta, setManualAbierta] = useState(false);
+  const [diasAbierta, setDiasAbierta] = useState(false);
+  const [horasAbierta, setHorasAbierta] = useState(false);
   const [generarAbierta, setGenerarAbierta] = useState(false);
   const [celda, setCelda] = useState<{ document: string; nombre: string; fecha: string; entrada?: Entrada } | null>(null);
 
@@ -233,6 +241,7 @@ function Novedades() {
     void qc.invalidateQueries({ queryKey: ["nov-entradas"] });
     void qc.invalidateQueries({ queryKey: ["nov-totales"] });
     void qc.invalidateQueries({ queryKey: ["nov-reportes"] });
+    void qc.invalidateQueries({ queryKey: ["nov-historial"] });
   }, [qc]);
 
   const fechas = useMemo(() => rangoFechas(desde, hasta), [desde, hasta]);
@@ -257,6 +266,41 @@ function Novedades() {
   }, [entradasVis]);
 
   const pendientes = (entradasVis ?? []).filter((e) => e.status === "pendiente" && e.source === "manual");
+
+  // Plantilla con el personal del alcance (activos y quienes ya tienen novedades en el periodo)
+  const [descargando, setDescargando] = useState(false);
+  async function descargarPlantilla() {
+    const fechas = rangoFechas(desde, hasta);
+    if (!fechas.length || fechas.length > 31) { toast.error("Elige un periodo de 1 a 31 días para la plantilla"); return; }
+    setDescargando(true);
+    try {
+      type Emp = { document: string; full_name: string; position: string | null; status: string; campaigns: { name: string } | null };
+      const emps = await todas<Emp>((a, b) =>
+        supabase.from("employees").select("document, full_name, position, status, campaigns(name)").order("full_name").range(a, b));
+      const conNovedad = new Set((entradasVis ?? []).map((e) => e.document));
+      let personas = emps.filter((e) => e.document && (e.status === "activo" || conNovedad.has(e.document)));
+      if (campanasSel.length) personas = personas.filter((e) => campanasSel.includes(e.campaigns?.name ?? ""));
+      if (personasSel.length) personas = personas.filter((e) => personasSel.includes(e.document));
+      if (!personas.length) { toast.error("No hay personal con los filtros actuales"); return; }
+      const dias = new Map((entradasVis ?? []).map((e) => [`${e.document}|${e.work_date}`, e.novelty_type]));
+      const tot = new Map<string, Record<string, unknown>>();
+      for (const t of (totalesVis ?? []) as unknown as Record<string, unknown>[]) if (!tot.has(String(t["document"]))) tot.set(String(t["document"]), t);
+      const campanasPlantilla = [...new Set(personas.map((p) => p.campaigns?.name ?? ""))];
+      await descargarPlantillaNovedades({
+        empresa: acceso.tenantName ?? "Empresa",
+        titulo: campanasPlantilla.length === 1 && campanasPlantilla[0] ? campanasPlantilla[0] : "Todas las campañas",
+        fechas,
+        personas: personas.map((p) => ({ document: p.document, full_name: p.full_name, position: p.position, campana: p.campaigns?.name ?? null })),
+        dia: (doc, f) => dias.get(`${doc}|${f}`),
+        totales: (doc) => tot.get(doc) as never,
+      });
+      toast.success(`Plantilla descargada (${personas.length} personas)`, { description: "Uso interno de Convertia: no la compartas con personas ajenas a la organización." });
+    } catch (e) {
+      toast.error("No se pudo generar la plantilla", { description: (e as Error).message });
+    } finally {
+      setDescargando(false);
+    }
+  }
 
   async function revisar(ids: string[], status: "aprobada" | "rechazada") {
     const { error } = await supabase
@@ -286,7 +330,7 @@ function Novedades() {
     <div>
       <PageHeader
         titulo="Novedades"
-        descripcion="Carga la plantilla de novedades de la quincena: se cruza automáticamente con el biométrico y Nómina aprueba u observa cada persona."
+        descripcion="Los supervisores reportan días y horas (con plantilla o directamente aquí); Nómina revisa contra el biométrico y aprueba, observa o rechaza, con segunda revisión cuando el supervisor responde."
         acciones={
           <>
             {puedeCrear ? (
@@ -295,8 +339,18 @@ function Novedades() {
               </Button>
             ) : null}
             {puedeCrear ? (
-              <Button variant="outline" onClick={() => setManualAbierta(true)}>
-                <Plus className="size-4" /> Registrar novedad
+              <Button variant="outline" onClick={() => setDiasAbierta(true)}>
+                <CalendarPlus className="size-4" /> Registrar novedades
+              </Button>
+            ) : null}
+            {puedeCrear ? (
+              <Button variant="outline" onClick={() => setHorasAbierta(true)}>
+                <Timer className="size-4" /> Reportar horas
+              </Button>
+            ) : null}
+            {puedeCrear || puedeImportar ? (
+              <Button variant="outline" onClick={() => void descargarPlantilla()} disabled={descargando}>
+                {descargando ? <Loader2 className="size-4 animate-spin" /> : <Download className="size-4" />} Descargar plantilla
               </Button>
             ) : null}
             {puedeImportar ? (
@@ -386,16 +440,29 @@ function Novedades() {
         </form>
       </Card>
 
-      <Tabs defaultValue="conciliacion">
-        <TabsList className="mb-3">
-          <TabsTrigger value="conciliacion">Conciliación con biométrico</TabsTrigger>
+      <Tabs defaultValue="resumen">
+        <TabsList className="mb-3 h-auto flex-wrap justify-start">
+          <TabsTrigger value="resumen">Resumen por persona</TabsTrigger>
+          {puedeAprobar ? <TabsTrigger value="conciliacion">Conciliación con biométrico</TabsTrigger> : null}
           <TabsTrigger value="matriz">Novedades por día</TabsTrigger>
           {pendientes.length ? <TabsTrigger value="pendientes">Manuales pendientes ({pendientes.length})</TabsTrigger> : null}
           <TabsTrigger value="plantillas">Plantillas cargadas</TabsTrigger>
         </TabsList>
 
+        <TabsContent value="resumen">
+          <ResumenNovedades
+            totales={(totalesVis ?? []) as unknown as TotalResumen[]}
+            entradas={(entradasVis ?? []) as EntradaResumen[]}
+            cargando={totales.isLoading || entradas.isLoading}
+            puedeAprobar={puedeAprobar}
+            puedeResponder={puedeCrear || acceso.can("novedades", "editar")}
+            tenantId={acceso.tenantId}
+            onCambio={refrescar}
+          />
+        </TabsContent>
+
         <TabsContent value="conciliacion">
-          <ConciliacionNovedades desde={desde} hasta={hasta} puedeAprobar={puedeAprobar} campanas={campanasSel} personas={personasSel} buscar={buscar} documentosCampanas={documentosCampanas} />
+          {puedeAprobar ? <ConciliacionNovedades desde={desde} hasta={hasta} puedeAprobar={puedeAprobar} campanas={campanasSel} personas={personasSel} buscar={buscar} documentosCampanas={documentosCampanas} /> : null}
         </TabsContent>
 
         <TabsContent value="matriz">
@@ -516,7 +583,8 @@ function Novedades() {
       </Tabs>
 
       <CargaPlantillas abierta={cargaAbierta} onClose={() => setCargaAbierta(false)} onListo={refrescar} tenantId={acceso.tenantId} />
-      <RegistroManual abierta={manualAbierta} onClose={() => setManualAbierta(false)} onListo={refrescar} tenantId={acceso.tenantId} />
+      <RegistrarDias abierta={diasAbierta} onClose={() => setDiasAbierta(false)} onListo={refrescar} tenantId={acceso.tenantId} desde0={desde} hasta0={hasta} />
+      <ReportarHoras abierta={horasAbierta} onClose={() => setHorasAbierta(false)} onListo={refrescar} desde0={desde} hasta0={hasta} />
       <GenerarAsistencia abierta={generarAbierta} onClose={() => setGenerarAbierta(false)} onListo={refrescar} desde0={desde} hasta0={hasta} />
       <EditarCelda celda={celda} onClose={() => setCelda(null)} onListo={refrescar} tenantId={acceso.tenantId} puedeEliminar={puedeEliminar} />
     </div>
@@ -708,93 +776,6 @@ function CargaPlantillas({ abierta, onClose, onListo, tenantId }: { abierta: boo
 
 /* ---------------- Registro manual ---------------- */
 
-type Emp = { id: string; document: string; full_name: string; position: string | null; campaigns: { name: string } | null };
-
-function useEmpleados(activo: boolean) {
-  return useQuery({
-    queryKey: ["nov-empleados"],
-    enabled: activo,
-    queryFn: () => traerTodo<Emp>((a, b) => supabase.from("employees").select("id, document, full_name, position, campaigns(name)").order("full_name").range(a, b) as unknown as PromiseLike<{ data: Emp[] | null; error: unknown }>),
-  });
-}
-
-function RegistroManual({ abierta, onClose, onListo, tenantId }: { abierta: boolean; onClose: () => void; onListo: () => void; tenantId: string | null }) {
-  const empleados = useEmpleados(abierta);
-  const [emp, setEmp] = useState("");
-  const [tipo, setTipo] = useState<string>("Incapacidad");
-  const [desde, setDesde] = useState(iso(new Date()));
-  const [hasta, setHasta] = useState(iso(new Date()));
-  const [notas, setNotas] = useState("");
-  const [guardando, setGuardando] = useState(false);
-
-  const elegido = (empleados.data ?? []).find((e) => `${e.full_name} · ${e.document}` === emp || e.document === emp.trim());
-
-  async function guardar() {
-    if (!tenantId || !elegido) { toast.error("Elige un empleado de la lista."); return; }
-    if (hasta < desde) { toast.error("La fecha final no puede ser anterior a la inicial."); return; }
-    const dias = rangoFechas(desde, hasta);
-    setGuardando(true);
-    const { error } = await supabase.from("novelty_entries").upsert(
-      dias.map((d) => ({
-        tenant_id: tenantId,
-        employee_id: elegido.id,
-        document: elegido.document,
-        full_name: elegido.full_name,
-        position: elegido.position,
-        campaign_label: elegido.campaigns?.name ?? null,
-        work_date: d,
-        novelty_type: tipo,
-        source: "manual",
-        status: "pendiente",
-        notes: notas || null,
-        report_id: null,
-      })),
-      { onConflict: "tenant_id,document,work_date" },
-    );
-    setGuardando(false);
-    if (error) { toast.error(error.message); return; }
-    toast.success(`Novedad registrada en ${dias.length} día(s); queda pendiente de aprobación.`);
-    setEmp(""); setNotas("");
-    onListo(); onClose();
-  }
-
-  return (
-    <Dialog open={abierta} onOpenChange={(v) => !v && onClose()}>
-      <DialogContent>
-        <DialogHeader>
-          <DialogTitle>Registrar novedad</DialogTitle>
-          <DialogDescription>Aplica a cada día del rango. Reemplaza lo que haya en esos días y queda pendiente de aprobación.</DialogDescription>
-        </DialogHeader>
-        <div className="space-y-3">
-          <div className="space-y-1.5">
-            <Label>Empleado</Label>
-            <Input list="nov-emps" placeholder={empleados.isLoading ? "Cargando…" : "Escribe nombre o documento"} value={emp} onChange={(e) => setEmp(e.target.value)} />
-            <datalist id="nov-emps">
-              {(empleados.data ?? []).map((e) => <option key={e.id} value={`${e.full_name} · ${e.document}`} />)}
-            </datalist>
-          </div>
-          <div className="space-y-1.5">
-            <Label>Tipo de novedad</Label>
-            <Select value={tipo} onValueChange={setTipo}>
-              <SelectTrigger><SelectValue /></SelectTrigger>
-              <SelectContent>{TIPOS_NOVEDAD.map((t) => <SelectItem key={t} value={t}>{t}</SelectItem>)}</SelectContent>
-            </Select>
-          </div>
-          <div className="grid grid-cols-2 gap-3">
-            <div className="space-y-1.5"><Label>Desde</Label><Input type="date" value={desde} onChange={(e) => setDesde(e.target.value)} /></div>
-            <div className="space-y-1.5"><Label>Hasta</Label><Input type="date" value={hasta} onChange={(e) => setHasta(e.target.value)} /></div>
-          </div>
-          <div className="space-y-1.5"><Label>Notas / soporte</Label><Textarea value={notas} onChange={(e) => setNotas(e.target.value)} placeholder="Ej: incapacidad EPS No. 012345" /></div>
-        </div>
-        <DialogFooter>
-          <Button variant="outline" onClick={onClose}>Cancelar</Button>
-          <Button onClick={guardar} disabled={guardando || !elegido}>{guardando ? <Loader2 className="size-4 animate-spin" /> : null} Guardar</Button>
-        </DialogFooter>
-      </DialogContent>
-    </Dialog>
-  );
-}
-
 /* ---------------- Generar desde asistencia ---------------- */
 
 function GenerarAsistencia({ abierta, onClose, onListo, desde0, hasta0 }: { abierta: boolean; onClose: () => void; onListo: () => void; desde0: string; hasta0: string }) {
@@ -839,6 +820,9 @@ function EditarCelda({ celda, onClose, onListo, tenantId, puedeEliminar }: {
 }) {
   const [tipo, setTipo] = useState("");
   const [notas, setNotas] = useState("");
+  // Los comentarios y evidencias se guardan por persona: se busca su id por documento
+  const empleados = useEmpleadosFiltro();
+  const empleadoId = celda ? empleados.data?.find((e) => e.document === celda.document)?.id : undefined;
   const clave = celda ? `${celda.document}-${celda.fecha}` : "";
   const [claveActual, setClaveActual] = useState("");
   if (celda && clave !== claveActual) {
@@ -880,7 +864,7 @@ function EditarCelda({ celda, onClose, onListo, tenantId, puedeEliminar }: {
 
   return (
     <Dialog open={Boolean(celda)} onOpenChange={(v) => !v && onClose()}>
-      <DialogContent>
+      <DialogContent className="max-h-[90vh] overflow-y-auto">
         <DialogHeader>
           <DialogTitle>{celda?.nombre}</DialogTitle>
           <DialogDescription>
@@ -905,6 +889,17 @@ function EditarCelda({ celda, onClose, onListo, tenantId, puedeEliminar }: {
           <Button variant="outline" onClick={onClose}>Cancelar</Button>
           <Button onClick={guardar}>Guardar</Button>
         </DialogFooter>
+        {celda && empleadoId ? (
+          <div className="border-t pt-3">
+            <p className="mb-2 text-sm font-medium">Comentarios y evidencias de este día</p>
+            <HiloComentarios empleadoId={empleadoId} fecha={celda.fecha} contexto="novedad" compacto soloDelDia />
+          </div>
+        ) : null}
+        {celda ? (
+          <div className="border-t pt-3">
+            <HistorialCambios tabla="novelty_entries" clave={{ document: celda.document, fecha: celda.fecha }} />
+          </div>
+        ) : null}
       </DialogContent>
     </Dialog>
   );

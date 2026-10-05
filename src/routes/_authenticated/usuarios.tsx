@@ -479,7 +479,7 @@ function VinculoEmpleado({ perfil }: { perfil: Perfil }) {
           <Button type="button" variant="ghost" size="sm" disabled={guardar.isPending} onClick={() => guardar.mutate(null)}>Quitar</Button>
         </div>
       ) : (
-        <p className="text-xs text-muted-foreground">Sin vínculo. Un asesor o BO sin campañas asignadas solo ve la información de su empleado vinculado.</p>
+        <p className="text-xs text-muted-foreground">Sin vínculo. Un asesor (o un BO sin campañas) solo ve la información de su empleado vinculado: vincúlalo para que vea sus datos.</p>
       )}
       <div className="flex gap-2">
         <Input placeholder="Documento del empleado" value={documento} onChange={(e) => setDocumento(e.target.value)} />
@@ -586,7 +586,8 @@ function RolesUsuario({
             setRolId(v);
             const c = roles.find((r) => r.id === v)?.code ?? "";
             if (["admin", "nomina", "super_admin"].includes(c)) setScope("plataforma");
-            else if (["supervisor", "coordinador", "asesor", "bo"].includes(c)) setScope("campanas_asignadas");
+            else if (c === "asesor") setScope("solo_yo"); // el asesor solo ve lo suyo
+            else if (["supervisor", "coordinador", "bo"].includes(c)) setScope("campanas_asignadas");
           }}
         >
           <SelectTrigger><SelectValue placeholder="Selecciona un rol" /></SelectTrigger>
@@ -603,7 +604,7 @@ function RolesUsuario({
         {requiereCampanas ? (
           <div className="space-y-1">
             <p className="text-xs text-muted-foreground">
-              {esAsesor ? "Un asesor puede tener una sola campaña: verá a todas las personas de esa campaña." : "Puede ver una o varias campañas."}
+              {esAsesor ? "Un asesor siempre ve solo su propia información; la campaña es informativa (máximo una)." : "Puede ver una o varias campañas."}
             </p>
             <div className="max-h-44 space-y-1 overflow-auto rounded-md border bg-background p-2">
               {(campanas.data ?? []).map((c) => (

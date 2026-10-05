@@ -16,7 +16,7 @@ function Campanas() {
       descripcion="Agrupación operativa del personal para reportes y permisos."
       tabla="campaigns"
       modulo="campanas"
-      select="*, cost_centers(name), shifts(name)"
+      select="*, cost_centers(name), shifts!campaigns_shift_id_fkey(name)"
       orden="name"
       ordenAsc
       buscarEn={["code", "name"]}

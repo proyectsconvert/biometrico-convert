@@ -22,7 +22,12 @@ export const recalcularAsistencia = createServerFn({ method: "POST" })
         context.supabase.rpc("has_permission", { _module: m!, _action: a! }),
       ),
     );
-    if (!permisos.some((p) => p.data)) throw new Error("No tienes permiso para recalcular la asistencia.");
+    if (!permisos.some((p) => p.data)) {
+      // Quien asigna turnos puede recalcular solo el rango afectado (máximo 62 días)
+      const { data: asigna } = await context.supabase.rpc("has_permission", { _module: "turnos", _action: "asignar" });
+      const dias = data.desde && data.hasta ? (Date.parse(data.hasta) - Date.parse(data.desde)) / 864e5 : Infinity;
+      if (!asigna || dias < 0 || dias > 62) throw new Error("No tienes permiso para recalcular la asistencia.");
+    }
     const { data: tenant } = await context.supabase.rpc("current_tenant_id");
     if (!tenant) throw new Error("Tu usuario no está asignado a una empresa.");
     const { supabaseAdmin } = await import("@/integrations/supabase/client.server");

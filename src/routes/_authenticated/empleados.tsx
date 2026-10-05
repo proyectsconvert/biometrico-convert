@@ -2,14 +2,17 @@ import { createFileRoute } from "@tanstack/react-router";
 import { useState } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
-import { Building2, UserCheck, UserX } from "lucide-react";
+import { Building2, MessageSquarePlus, MessageSquareText, UserCheck, UserX } from "lucide-react";
 import { CrudPage, type Registro } from "@/components/crud-page";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { EmpleadosMasivo } from "@/components/empleados-masivo";
+import { SolicitarAjusteDialog, SolicitudesEmpleados, type EmpleadoSolicitud } from "@/components/solicitudes-empleados";
+import { ComentariosEmpleadoDialog } from "@/components/comentarios-empleado";
 import { dbAny } from "@/lib/db";
+import { useAccess } from "@/lib/session";
 
 export const Route = createFileRoute("/_authenticated/empleados")({
   head: () => ({ meta: [{ title: "Empleados — Convert-IA" }] }),
@@ -22,6 +25,12 @@ const texto = (v: unknown) => (v === null || v === undefined || v === "" ? "—"
 const nombreRel = (v: unknown) => texto((v as { name?: string } | null)?.name);
 
 function Empleados() {
+  const acceso = useAccess();
+  // Quien no edita empleados (supervisor, coordinador) pide los ajustes a Nómina/Administración
+  const soloSolicita = !acceso.can("empleados", "editar");
+  const [solicitar, setSolicitar] = useState<EmpleadoSolicitud[] | null>(null);
+  const [comentarios, setComentarios] = useState<{ id: string; full_name: string } | null>(null);
+  const aSolicitud = (f: Registro): EmpleadoSolicitud => ({ id: f.id as string, full_name: f.full_name as string, status: f.status as string });
   const empleadores = useQuery({
     queryKey: ["employers", "opciones"],
     queryFn: async () => {
@@ -33,6 +42,7 @@ function Empleados() {
   const lista = empleadores.data ?? [];
 
   return (
+    <>
     <CrudPage
       titulo="Empleados"
       descripcion="Maestro de personal vinculado al documento del biométrico. El empleador define si la persona cuenta en el panel y los reportes."
@@ -41,7 +51,20 @@ function Empleados() {
       select="*, campaigns(name), cost_centers(name), shifts(name), employers(name, include_in_reports)"
       orden="full_name"
       ordenAsc
-      accionesExtra={<EmpleadosMasivo />}
+      accionesExtra={<><SolicitudesEmpleados /><EmpleadosMasivo /></>}
+      seleccionSinEditar={soloSolicita}
+      accionesFila={(f) => (
+        <>
+          <Button variant="ghost" size="icon" aria-label="Comentarios y evidencias" title="Comentarios y evidencias" onClick={() => setComentarios({ id: f.id as string, full_name: f.full_name as string })}>
+            <MessageSquareText className="size-4" />
+          </Button>
+          {soloSolicita ? (
+            <Button variant="ghost" size="icon" aria-label="Solicitar ajuste" title="Solicitar ajuste a Nómina" onClick={() => setSolicitar([aSolicitud(f)])}>
+              <MessageSquarePlus className="size-4" />
+            </Button>
+          ) : null}
+        </>
+      )}
       buscarEn={["document", "full_name", "position", "biometric_group"]}
       aviso={(filas) => {
         const sin = filas.filter((f) => !f.employer_id && f.status === "activo").length;
@@ -89,7 +112,11 @@ function Empleados() {
           aplicar: (f: Registro, v) => f.status === v,
         },
       ]}
-      accionesMasivas={(sel, limpiar) => <AccionesMasivas seleccion={sel} limpiar={limpiar} empleadores={lista} />}
+      accionesMasivas={(sel, limpiar) => soloSolicita ? (
+        <Button size="sm" onClick={() => { setSolicitar(sel.map(aSolicitud)); limpiar(); }}>
+          <MessageSquarePlus className="size-4" /> Solicitar ajuste
+        </Button>
+      ) : <AccionesMasivas seleccion={sel} limpiar={limpiar} empleadores={lista} />}
       columnas={[
         { key: "document", header: "Documento", cell: (f) => <span className="tabular-nums">{texto(f.document)}</span> },
         {
@@ -145,12 +172,15 @@ function Empleados() {
         { name: "email", label: "Correo", type: "email" },
         { name: "campaign_id", label: "Campaña", fuente: { tabla: "campaigns" } },
         { name: "cost_center_id", label: "Centro de costo", fuente: { tabla: "cost_centers" } },
-        { name: "shift_id", label: "Turno", fuente: { tabla: "shifts" } },
+        { name: "shift_id", label: "Turno fijo (base)", fuente: { tabla: "shifts" }, ayuda: "Los turnos por semana y las rotaciones se asignan en el módulo Turnos y tienen prioridad sobre este." },
         { name: "hire_date", label: "Fecha de ingreso", type: "date" },
         { name: "termination_date", label: "Fecha de retiro", type: "date", ayuda: "El ausentismo de la persona se cuenta solo hasta esta fecha." },
         { name: "biometric_group", label: "Grupo biométrico", ayuda: "Grupo del lector BioStar; puede asignar el empleador automáticamente." },
       ]}
     />
+    <SolicitarAjusteDialog empleados={solicitar ?? []} abierta={Boolean(solicitar)} onClose={() => setSolicitar(null)} />
+    <ComentariosEmpleadoDialog empleado={comentarios} onClose={() => setComentarios(null)} />
+    </>
   );
 }
 

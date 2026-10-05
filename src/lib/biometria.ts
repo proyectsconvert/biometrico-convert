@@ -139,5 +139,6 @@ export function descargarCsv(nombre: string, filas: Record<string, unknown>[]) {
   a.href = url;
   a.download = nombre.endsWith(".csv") ? nombre : `${nombre}.csv`;
   a.click();
-  URL.revokeObjectURL(url);
+  // Revocar en el mismo instante puede cancelar la descarga en algunos navegadores
+  setTimeout(() => URL.revokeObjectURL(url), 2000);
 }

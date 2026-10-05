@@ -38,7 +38,8 @@ const GRUPOS: { titulo: string; modulos: [string, string][] }[] = [
 ];
 const ACCIONES: [string, string][] = [
   ["ver", "Ver"], ["crear", "Crear"], ["editar", "Editar"], ["eliminar", "Eliminar"], ["importar", "Importar"], ["exportar", "Exportar"],
-  ["aprobar", "Aprobar"], ["rechazar", "Rechazar"], ["ajustar", "Ajustar"], ["configurar", "Configurar"], ["depurar", "Depurar"],
+  ["aprobar", "Aprobar"], ["rechazar", "Rechazar"], ["ajustar", "Ajustar"], ["configurar", "Configurar"], ["depurar", "Depurar"], ["asignar", "Asignar"],
+  ["exportar_adecco", "Exportar Adecco"],
 ];
 const PLANTILLAS: { id: string; label: string; acciones: string[] | null }[] = [
   { id: "todo", label: "Acceso total", acciones: null },

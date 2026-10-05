@@ -75,6 +75,8 @@ export function CrudPage({
   accionesExtra,
   filtros = [],
   accionesMasivas,
+  seleccionSinEditar = false,
+  accionesFila,
   aviso,
 }: {
   titulo: string;
@@ -95,6 +97,10 @@ export function CrudPage({
   filtros?: Filtro[];
   /** Activa la selección múltiple; recibe las filas elegidas y una función para limpiar. */
   accionesMasivas?: (seleccion: Registro[], limpiar: () => void) => ReactNode;
+  /** Permite seleccionar filas aunque no se pueda editar (p. ej. para enviar solicitudes). */
+  seleccionSinEditar?: boolean;
+  /** Botones adicionales en la columna de acciones de cada fila. */
+  accionesFila?: ((fila: Registro) => ReactNode) | undefined;
   /** Contenido opcional bajo el encabezado (avisos, resúmenes). */
   aviso?: (filas: Registro[]) => ReactNode;
 }) {
@@ -203,7 +209,7 @@ export function CrudPage({
   const puedeEliminar = permitirEliminar && acceso.can(modulo, "eliminar");
 
   const columnaSeleccion: Columna<Registro>[] =
-    accionesMasivas && puedeEditar
+    (accionesMasivas && seleccionSinEditar) || puedeEditar
       ? [
           {
             key: "_sel",
@@ -245,7 +251,7 @@ export function CrudPage({
   const columnasConAcciones: Columna<Registro>[] = [
     ...columnaSeleccion,
     ...columnasOrdenables,
-    ...(puedeEditar || puedeEliminar
+    ...(puedeEditar || puedeEliminar || accionesFila
       ? [
           {
             key: "acciones",
@@ -253,6 +259,7 @@ export function CrudPage({
             className: "w-24 text-right",
             cell: (fila: Registro) => (
               <div className="flex justify-end gap-1">
+                {accionesFila?.(fila)}
                 {puedeEditar ? (
                   <Button
                     variant="ghost"
@@ -372,10 +379,13 @@ export function CrudPage({
         </div>
       ) : null}
 
-      {accionesMasivas && seleccionadas.length > 0 ? (
+      {seleccionadas.length > 0 && (accionesMasivas || puedeEditar) ? (
         <div className="mb-3 flex flex-wrap items-center gap-2 rounded-lg border border-primary/40 bg-primary/5 px-3 py-2 text-sm">
           <span className="font-medium">{seleccionadas.length} seleccionados</span>
-          {accionesMasivas(seleccionadas, limpiarSeleccion)}
+          {accionesMasivas?.(seleccionadas, limpiarSeleccion)}
+          {puedeEditar ? (
+            <EdicionMasiva tabla={tabla} campos={campos} seleccion={seleccionadas} limpiar={limpiarSeleccion} />
+          ) : null}
           <Button variant="ghost" size="sm" className="ml-auto" onClick={limpiarSeleccion}>
             <X className="size-4" /> Quitar selección
           </Button>
@@ -425,6 +435,75 @@ export function CrudPage({
         </DialogContent>
       </Dialog>
     </div>
+  );
+}
+
+/** Aplica el mismo valor de un campo a todos los registros seleccionados (queda en la auditoría). */
+function EdicionMasiva({ tabla, campos, seleccion, limpiar }: { tabla: string; campos: Campo[]; seleccion: Registro[]; limpiar: () => void }) {
+  const qc = useQueryClient();
+  const [abierto, setAbierto] = useState(false);
+  const [campo, setCampo] = useState("");
+  const [valor, setValor] = useState<unknown>("");
+  const [trabajando, setTrabajando] = useState(false);
+  // Los identificadores (código, documento, nombre obligatorio) no se cambian en bloque
+  const editables = campos.filter((c) => !c.required && !c.readOnlyOnEdit && c.type !== "lista");
+  const elegido = editables.find((c) => c.name === campo);
+  if (!editables.length) return null;
+
+  async function aplicar() {
+    if (!elegido) return;
+    const v = valor === "" || valor === SIN_VALOR ? null : valor;
+    if (!confirm(`¿Cambiar «${elegido.label}» en ${seleccion.length} registros?`)) return;
+    setTrabajando(true);
+    try {
+      const ids = seleccion.map((f) => f.id as string);
+      for (let i = 0; i < ids.length; i += 200) {
+        const { error } = await dbAny.from(tabla).update({ [elegido.name]: v }).in("id", ids.slice(i, i + 200));
+        if (error) throw error;
+      }
+      toast.success(`«${elegido.label}» actualizado en ${ids.length} registros`);
+      setAbierto(false);
+      setCampo("");
+      setValor("");
+      limpiar();
+      void qc.invalidateQueries();
+    } catch (e) {
+      toast.error("No se pudo actualizar", { description: (e as Error).message });
+    } finally {
+      setTrabajando(false);
+    }
+  }
+
+  return (
+    <>
+      <Button size="sm" variant="outline" onClick={() => setAbierto(true)}>
+        <Pencil className="size-4" /> Editar en bloque
+      </Button>
+      <Dialog open={abierto} onOpenChange={setAbierto}>
+        <DialogContent className="sm:max-w-md">
+          <DialogHeader>
+            <DialogTitle>Editar {seleccion.length} registros</DialogTitle>
+          </DialogHeader>
+          <div className="space-y-4">
+            <div className="space-y-1.5">
+              <Label>Campo a cambiar</Label>
+              <Select value={campo} onValueChange={(v) => { setCampo(v); setValor(campos.find((c) => c.name === v)?.type === "switch" ? true : ""); }}>
+                <SelectTrigger><SelectValue placeholder="Elige el campo" /></SelectTrigger>
+                <SelectContent>
+                  {editables.map((c) => <SelectItem key={c.name} value={c.name}>{c.label}</SelectItem>)}
+                </SelectContent>
+              </Select>
+            </div>
+            {elegido ? <CampoForm campo={{ ...elegido, label: "Nuevo valor" }} valor={valor} editando={false} onChange={setValor} /> : null}
+            <p className="text-xs text-muted-foreground">El cambio queda en la auditoría con el valor anterior de cada registro.</p>
+          </div>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setAbierto(false)}>Cancelar</Button>
+            <Button onClick={() => void aplicar()} disabled={!elegido || trabajando}>Aplicar a {seleccion.length}</Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+    </>
   );
 }
 

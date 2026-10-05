@@ -32,6 +32,7 @@ import { Tooltip, TooltipContent, TooltipTrigger, TooltipProvider } from "@/comp
 import { useAccess, useSignOut } from "@/lib/session";
 import { Button } from "@/components/ui/button";
 import { MiContrasena } from "@/components/mi-contrasena";
+import { CampanaNotificaciones } from "@/components/notificaciones";
 import { cn } from "@/lib/utils";
 
 type Item = {
@@ -85,6 +86,13 @@ const GRUPOS: { titulo: string; items: Item[] }[] = [
       { to: "/empresas", label: "Empresas (tenants)", icon: Building2, module: "empresas", superOnly: true },
     ],
   },
+];
+
+/** Ruta → módulo que exige (permiso «ver»). Lo usa el guardián de rutas del layout. */
+export const RUTAS_MODULO: { to: string; label: string; module: string; superOnly?: boolean }[] = [
+  ...GRUPOS.flatMap((g) => g.items.map(({ to, label, module, superOnly }) => ({ to, label, module, ...(superOnly ? { superOnly } : {}) }))),
+  { to: "/reglas", label: "Reglas de cálculo", module: "reglas" },
+  { to: "/resultados", label: "Control diario", module: "asistencia" },
 ];
 
 function Navegacion({ compacto, onNavegar }: { compacto: boolean; onNavegar?: () => void }) {
@@ -248,6 +256,7 @@ export function AppShell({ children }: { children: ReactNode }) {
               </div>
             </div>
             <div className="flex items-center gap-1">
+              <CampanaNotificaciones />
               <MiContrasena />
               <Button variant="ghost" size="sm" onClick={cerrarSesion}>
                 <LogOut className="size-4" /> Salir

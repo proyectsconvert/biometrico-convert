@@ -69,10 +69,10 @@ function resolverAcceso(cat: Catalogos, esSuper: boolean, rolTexto: string, camp
   if (noEncontradas.length) return `Campaña no encontrada: ${noEncontradas.join(", ")}.`;
   if (grupo === "campanas" && !campaignIds.length) return "Indica al menos una campaña (varias separadas por comas).";
   if (grupo === "asesor" && campaignIds.length > 1) return "Un asesor solo puede tener una campaña.";
-  // Asesor sin campaña solo ve lo suyo; con campaña, a los de su campaña
+  // El asesor solo ve su propia información (su campaña es informativa); la base de datos también lo garantiza
   const alcance = ["admin", "nomina", "super_admin"].includes(rol.code)
     ? "plataforma"
-    : grupo === "basico" ? "mi_empresa" : campaignIds.length ? "campanas_asignadas" : "solo_yo";
+    : grupo === "basico" ? "mi_empresa" : grupo === "asesor" ? "solo_yo" : campaignIds.length ? "campanas_asignadas" : "solo_yo";
   return { rol, grupo, campaignIds: [...new Set(campaignIds)], alcance };
 }
 
@@ -445,6 +445,9 @@ export const vincularEmpleado = createServerFn({ method: "POST" })
     z.object({ id: z.string().uuid(), documento: z.string().trim().max(20).nullable() }).parse(d),
   )
   .handler(async ({ data, context }) => {
+    // Vincularse a sí mismo con otro empleado daría acceso a sus datos: solo quien administra usuarios
+    const { data: puede } = await context.supabase.rpc("has_permission", { _module: "usuarios", _action: "editar" });
+    if (!puede) throw new Error("No tienes permiso para vincular usuarios con empleados.");
     await validarEdicion(context, data.id);
     const { data: tenant } = await context.supabase.rpc("current_tenant_id");
     const { supabaseAdmin } = await import("@/integrations/supabase/client.server");

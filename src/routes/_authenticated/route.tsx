@@ -2,6 +2,7 @@ import { createFileRoute, Outlet, redirect } from "@tanstack/react-router";
 import { supabase } from "@/integrations/supabase/client";
 import { SessionProvider, useSupabaseSession } from "@/lib/session";
 import { AppShell } from "@/components/app-shell";
+import { GuardiaModulo } from "@/components/guardia-modulo";
 import { Skeleton } from "@/components/ui/skeleton";
 
 export const Route = createFileRoute("/_authenticated")({
@@ -30,7 +31,9 @@ function Layout() {
   return (
     <SessionProvider session={session}>
       <AppShell>
-        <Outlet />
+        <GuardiaModulo>
+          <Outlet />
+        </GuardiaModulo>
       </AppShell>
     </SessionProvider>
   );

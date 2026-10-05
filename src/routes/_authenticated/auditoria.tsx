@@ -37,6 +37,13 @@ const MODULOS: Record<string, string> = {
   empleados: "Empleados", usuarios: "Usuarios", roles: "Roles y permisos", reglas: "Reglas de cálculo",
   novedades: "Novedades", datos: "Calidad de datos", asistencia: "Control diario", importaciones: "Importaciones",
   dispositivos: "Dispositivos", festivos: "Festivos", empleadores: "Empleadores",
+  turnos: "Turnos", campanas: "Campañas", centros_costo: "Centros de costo",
+};
+// Entidades de la trazabilidad automática (acciones crear_*, editar_*, eliminar_*)
+const ENTIDADES: Record<string, string> = {
+  empleado: "empleado", novedad_dia: "novedad del día", novedad_horas: "horas de novedad", plantilla: "plantilla de novedades",
+  horario: "horario", rotacion: "rotación", asignacion: "asignación de turno", malla: "día de la malla", campana: "campaña",
+  centro_costo: "centro de costo", empleador: "empleador", festivo: "festivo", regla: "regla de cálculo", dispositivo: "dispositivo",
 };
 const ACCIONES: Record<string, { label: string; clase: string }> = {
   crear: { label: "Creó", clase: "bg-emerald-100 text-emerald-800 dark:bg-emerald-950 dark:text-emerald-300" },
@@ -49,8 +56,24 @@ const ACCIONES: Record<string, { label: string; clase: string }> = {
   eliminar: { label: "Eliminó", clase: "bg-red-100 text-red-800 dark:bg-red-950 dark:text-red-300" },
   ocultar: { label: "Ocultó", clase: "bg-red-100 text-red-800 dark:bg-red-950 dark:text-red-300" },
   mostrar: { label: "Mostró", clase: "bg-sky-100 text-sky-800 dark:bg-sky-950 dark:text-sky-300" },
+  rechazado: { label: "Rechazó", clase: "bg-red-100 text-red-800 dark:bg-red-950 dark:text-red-300" },
+  respondido: { label: "Respondió", clase: "bg-violet-100 text-violet-800 dark:bg-violet-950 dark:text-violet-300" },
+  asignar: { label: "Asignó turnos", clase: "bg-sky-100 text-sky-800 dark:bg-sky-950 dark:text-sky-300" },
+  quitar_asignacion: { label: "Quitó asignación de turno", clase: "bg-red-100 text-red-800 dark:bg-red-950 dark:text-red-300" },
+  cargar_malla: { label: "Cargó plantilla de malla", clase: "bg-emerald-100 text-emerald-800 dark:bg-emerald-950 dark:text-emerald-300" },
+  programar_malla: { label: "Programó la malla", clase: "bg-sky-100 text-sky-800 dark:bg-sky-950 dark:text-sky-300" },
+  aprobar_solicitud: { label: "Aprobó solicitud", clase: "bg-emerald-100 text-emerald-800 dark:bg-emerald-950 dark:text-emerald-300" },
 };
-const accion = (a: string) => ACCIONES[a] ?? { label: a, clase: "bg-muted text-foreground" };
+const accion = (a: string) => {
+  if (ACCIONES[a]) return ACCIONES[a]!;
+  // Trazabilidad automática: «editar_novedad_dia», «crear_empleado_masivo», …
+  const m = a.match(/^(crear|editar|eliminar)_(.+?)(_masivo)?$/);
+  if (m) {
+    const base = ACCIONES[m[1]!]!;
+    return { label: `${base.label} ${ENTIDADES[m[2]!] ?? m[2]!.replace(/_/g, " ")}${m[3] ? " (masivo)" : ""}`, clase: base.clase };
+  }
+  return { label: a.replace(/_/g, " "), clase: "bg-muted text-foreground" };
+};
 const modulo = (m: string) => MODULOS[m] ?? m;
 
 /** Resumen legible de lo que cambió. */

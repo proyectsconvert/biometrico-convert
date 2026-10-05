@@ -25,6 +25,7 @@ import { Route as AuthenticatedFestivosRouteImport } from './routes/_authenticat
 import { Route as AuthenticatedImportacionesRouteImport } from './routes/_authenticated/importaciones'
 import { Route as AuthenticatedJornadaRouteImport } from './routes/_authenticated/jornada'
 import { Route as AuthenticatedMarcacionesRouteImport } from './routes/_authenticated/marcaciones'
+import { Route as AuthenticatedNotificacionesRouteImport } from './routes/_authenticated/notificaciones'
 import { Route as AuthenticatedNovedadesRouteImport } from './routes/_authenticated/novedades'
 import { Route as AuthenticatedPanelRouteImport } from './routes/_authenticated/panel'
 import { Route as AuthenticatedReglasRouteImport } from './routes/_authenticated/reglas'
@@ -118,6 +119,12 @@ const AuthenticatedMarcacionesRoute =
     path: '/marcaciones',
     getParentRoute: () => AuthenticatedRouteRoute,
   } as any)
+const AuthenticatedNotificacionesRoute =
+  AuthenticatedNotificacionesRouteImport.update({
+    id: '/notificaciones',
+    path: '/notificaciones',
+    getParentRoute: () => AuthenticatedRouteRoute,
+  } as any)
 const AuthenticatedNovedadesRoute = AuthenticatedNovedadesRouteImport.update({
   id: '/novedades',
   path: '/novedades',
@@ -175,6 +182,7 @@ export interface FileRoutesByFullPath {
   '/importaciones': typeof AuthenticatedImportacionesRoute
   '/jornada': typeof AuthenticatedJornadaRoute
   '/marcaciones': typeof AuthenticatedMarcacionesRoute
+  '/notificaciones': typeof AuthenticatedNotificacionesRoute
   '/novedades': typeof AuthenticatedNovedadesRoute
   '/panel': typeof AuthenticatedPanelRoute
   '/reglas': typeof AuthenticatedReglasRoute
@@ -200,6 +208,7 @@ export interface FileRoutesByTo {
   '/importaciones': typeof AuthenticatedImportacionesRoute
   '/jornada': typeof AuthenticatedJornadaRoute
   '/marcaciones': typeof AuthenticatedMarcacionesRoute
+  '/notificaciones': typeof AuthenticatedNotificacionesRoute
   '/novedades': typeof AuthenticatedNovedadesRoute
   '/panel': typeof AuthenticatedPanelRoute
   '/reglas': typeof AuthenticatedReglasRoute
@@ -227,6 +236,7 @@ export interface FileRoutesById {
   '/_authenticated/importaciones': typeof AuthenticatedImportacionesRoute
   '/_authenticated/jornada': typeof AuthenticatedJornadaRoute
   '/_authenticated/marcaciones': typeof AuthenticatedMarcacionesRoute
+  '/_authenticated/notificaciones': typeof AuthenticatedNotificacionesRoute
   '/_authenticated/novedades': typeof AuthenticatedNovedadesRoute
   '/_authenticated/panel': typeof AuthenticatedPanelRoute
   '/_authenticated/reglas': typeof AuthenticatedReglasRoute
@@ -254,6 +264,7 @@ export interface FileRouteTypes {
     | '/importaciones'
     | '/jornada'
     | '/marcaciones'
+    | '/notificaciones'
     | '/novedades'
     | '/panel'
     | '/reglas'
@@ -279,6 +290,7 @@ export interface FileRouteTypes {
     | '/importaciones'
     | '/jornada'
     | '/marcaciones'
+    | '/notificaciones'
     | '/novedades'
     | '/panel'
     | '/reglas'
@@ -305,6 +317,7 @@ export interface FileRouteTypes {
     | '/_authenticated/importaciones'
     | '/_authenticated/jornada'
     | '/_authenticated/marcaciones'
+    | '/_authenticated/notificaciones'
     | '/_authenticated/novedades'
     | '/_authenticated/panel'
     | '/_authenticated/reglas'
@@ -435,6 +448,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof AuthenticatedMarcacionesRouteImport
       parentRoute: typeof AuthenticatedRouteRoute
     }
+    '/_authenticated/notificaciones': {
+      id: '/_authenticated/notificaciones'
+      path: '/notificaciones'
+      fullPath: '/notificaciones'
+      preLoaderRoute: typeof AuthenticatedNotificacionesRouteImport
+      parentRoute: typeof AuthenticatedRouteRoute
+    }
     '/_authenticated/novedades': {
       id: '/_authenticated/novedades'
       path: '/novedades'
@@ -508,6 +528,7 @@ interface AuthenticatedRouteRouteChildren {
   AuthenticatedImportacionesRoute: typeof AuthenticatedImportacionesRoute
   AuthenticatedJornadaRoute: typeof AuthenticatedJornadaRoute
   AuthenticatedMarcacionesRoute: typeof AuthenticatedMarcacionesRoute
+  AuthenticatedNotificacionesRoute: typeof AuthenticatedNotificacionesRoute
   AuthenticatedNovedadesRoute: typeof AuthenticatedNovedadesRoute
   AuthenticatedPanelRoute: typeof AuthenticatedPanelRoute
   AuthenticatedReglasRoute: typeof AuthenticatedReglasRoute
@@ -532,6 +553,7 @@ const AuthenticatedRouteRouteChildren: AuthenticatedRouteRouteChildren = {
   AuthenticatedImportacionesRoute: AuthenticatedImportacionesRoute,
   AuthenticatedJornadaRoute: AuthenticatedJornadaRoute,
   AuthenticatedMarcacionesRoute: AuthenticatedMarcacionesRoute,
+  AuthenticatedNotificacionesRoute: AuthenticatedNotificacionesRoute,
   AuthenticatedNovedadesRoute: AuthenticatedNovedadesRoute,
   AuthenticatedPanelRoute: AuthenticatedPanelRoute,
   AuthenticatedReglasRoute: AuthenticatedReglasRoute,

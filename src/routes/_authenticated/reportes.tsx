@@ -2,6 +2,7 @@ import { createFileRoute, Link } from "@tanstack/react-router";
 import { useEffect, useMemo, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import * as XLSX from "xlsx";
+import { escribirLibro } from "@/lib/exportar";
 import { toast } from "sonner";
 import {
   AlarmClock, CalendarX2, History, ClipboardList, Clock3, Download, FileSpreadsheet, Info, ListChecks, Loader2, Scale, Search, Table2, TriangleAlert, Users, X,
@@ -297,7 +298,7 @@ function Reportes() {
       ]),
       "Información",
     );
-    XLSX.writeFile(wb, `${nombre}.xlsx`);
+    escribirLibro(wb, `${nombre}.xlsx`);
     toast.success("Reporte descargado", { description: "Contiene información de Convertia: no la compartas fuera de la organización." });
   }
 

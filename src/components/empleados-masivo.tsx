@@ -1,6 +1,7 @@
 import { useState } from "react";
 import { useQueryClient } from "@tanstack/react-query";
 import * as XLSX from "xlsx";
+import { escribirLibro } from "@/lib/exportar";
 import { toast } from "sonner";
 import { Check, Download, FileSpreadsheet, Loader2, Upload } from "lucide-react";
 import { supabase } from "@/integrations/supabase/client";
@@ -159,7 +160,7 @@ export function EmpleadosMasivo() {
         ]),
         "Instrucciones",
       );
-      XLSX.writeFile(wb, `empleados_${new Date().toISOString().slice(0, 10)}.xlsx`);
+      escribirLibro(wb, `empleados_${new Date().toISOString().slice(0, 10)}.xlsx`);
       toast.info("Plantilla descargada", { description: "Contiene información de Convertia: no la compartas con personas ajenas a la organización." });
     } catch (e) {
       toast.error("No se pudo generar la plantilla", { description: (e as Error).message });

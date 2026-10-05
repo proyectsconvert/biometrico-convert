@@ -3,13 +3,15 @@ import { useEffect, useMemo, useState, type ReactNode } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
 import {
-  AlertTriangle, CalendarSearch, CheckCircle2, ChevronDown, ChevronRight, CircleHelp, Clock, Download, Loader2,
+  AlertTriangle, CalendarSearch, CheckCircle2, ChevronDown, ChevronRight, CircleHelp, Clock, Download, FileSpreadsheet, Loader2,
   MessageSquareWarning, RotateCcw, SearchX, UserX, XCircle,
 } from "lucide-react";
 import { supabase } from "@/integrations/supabase/client";
 import { dbAny } from "@/lib/db";
 import { useAccess } from "@/lib/session";
 import { descargarCsv } from "@/lib/biometria";
+import * as XLSX from "xlsx";
+import { escribirLibro } from "@/lib/exportar";
 import { colorTipo, diaSemana, rangoFechas } from "@/lib/novedades";
 import { Paginador, usePaginado } from "@/components/simple-table";
 import { Badge } from "@/components/ui/badge";
@@ -43,7 +45,7 @@ export type FilaConciliacion = {
   comisiones: number;
   observaciones: string | null;
   estado: "coherente" | "advertencia" | "inconsistente" | "sin_biometria" | "no_encontrado";
-  review_status: "pendiente" | "aprobado" | "observado";
+  review_status: "pendiente" | "aprobado" | "observado" | "rechazado" | "respondido";
   review_comment: string | null;
   reviewed_at: string | null;
   reviewed_by: string | null;
@@ -53,6 +55,8 @@ const REVISION: Record<FilaConciliacion["review_status"], { label: string; clase
   pendiente: { label: "Pendiente de revisión", clase: "bg-sky-100 text-sky-800 hover:bg-sky-100 dark:bg-sky-950 dark:text-sky-300" },
   aprobado: { label: "Aprobado", clase: "bg-emerald-600 text-white hover:bg-emerald-600" },
   observado: { label: "Observado", clase: "bg-amber-100 text-amber-900 hover:bg-amber-100 dark:bg-amber-950 dark:text-amber-300" },
+  rechazado: { label: "Rechazado", clase: "bg-red-600 text-white hover:bg-red-600" },
+  respondido: { label: "Respondido · 2ª revisión", clase: "bg-violet-100 text-violet-900 hover:bg-violet-100 dark:bg-violet-950 dark:text-violet-300" },
 };
 
 const h = (v: number) => (v ? v.toLocaleString("es-CO", { maximumFractionDigits: 2 }) : "0");
@@ -60,6 +64,15 @@ const norm = (v: unknown) => String(v ?? "").normalize("NFD").replace(/[\u0300-\
 const fechaCorta = (f: string) => `${f.slice(8)}/${f.slice(5, 7)}`;
 /** Etiqueta sin el factor de recargo: «Extras diurnas (1,25)» → «Extras diurnas». */
 const nombreConcepto = (e: string) => e.replace(/\s*\(.*\)\s*$/, "");
+
+/** Columna de la plantilla (y su ajuste) → tipo de hora en el archivo de Adecco. */
+const ADECCO: { horas: string; ajuste: string; novedad: string }[] = [
+  { horas: "horas_nocturnas", ajuste: "ajuste_horas_nocturnas", novedad: "Recargo Nocturno 35%" },
+  { horas: "horas_extra_diurnas", ajuste: "ajuste_extra_diurnas", novedad: "Horas Extras Diurnas 1.25%" },
+  { horas: "horas_dom_fest_090", ajuste: "ajuste_dom_fest_090", novedad: "Recargo Dominical Diurno 90%" },
+  { horas: "horas_dom_fest_190", ajuste: "ajuste_dom_fest_190", novedad: "Hora Dominical o Festiva Ordinaria 190%" },
+  { horas: "horas_extra_nocturnas", ajuste: "ajuste_extra_nocturnas", novedad: "Horas Extras Nocturnas 1.75%" },
+];
 
 /** Solo se concilian quienes reportan horas; asistencia, descansos y faltas van en «Novedades por día». */
 const reportaHoras = (x: FilaConciliacion) => x.conceptos.some((c) => c.reportado > 0);
@@ -192,6 +205,46 @@ export function ConciliacionNovedades({
     return true;
   }
 
+  const aprobadas = filtradas.filter((x) => x.review_status === "aprobado");
+
+  /** Archivo para Adecco: una fila por persona y tipo de hora, solo de lo aprobado (horas + ajuste). */
+  async function exportarAdecco() {
+    if (!aprobadas.length) {
+      toast.info("No hay novedades aprobadas", { description: "Solo se exportan las personas con revisión «Aprobado» en el periodo y filtros actuales." });
+      return;
+    }
+    const { data, error } = await supabase
+      .from("novelty_totals")
+      .select(`id, document, ${ADECCO.flatMap((t) => [t.horas, t.ajuste]).join(", ")}`)
+      .in("id", aprobadas.map((x) => x.id));
+    if (error) {
+      toast.error("No se pudo generar el archivo", { description: error.message });
+      return;
+    }
+    const porId = new Map(aprobadas.map((x) => [x.id, x]));
+    const filasAdecco: (string | number)[][] = [];
+    for (const t of (data ?? []) as unknown as Record<string, string | number | null>[]) {
+      const x = porId.get(String(t["id"]))!;
+      for (const tipo of ADECCO) {
+        const cantidad = Math.round((Number(t[tipo.horas] ?? 0) + Number(t[tipo.ajuste] ?? 0)) * 100) / 100;
+        if (cantidad !== 0) filasAdecco.push([String(t["document"]), tipo.novedad, cantidad, x.campana_empleado ?? x.campaign_label ?? ""]);
+      }
+    }
+    filasAdecco.sort((a, b) => String(a[0]).localeCompare(String(b[0])) || ADECCO.findIndex((t) => t.novedad === a[1]) - ADECCO.findIndex((t) => t.novedad === b[1]));
+    const wb = XLSX.utils.book_new();
+    const ws = XLSX.utils.aoa_to_sheet([["Identificación", "Novedad", "cantidad", "observaciones"], ...filasAdecco]);
+    ws["!cols"] = [{ wch: 16 }, { wch: 42 }, { wch: 10 }, { wch: 28 }];
+    XLSX.utils.book_append_sheet(wb, ws, "Adecco");
+    XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet([
+      ["Novedades aprobadas para Adecco"],
+      [`Periodo: ${desde} a ${hasta}`],
+      [`Personas aprobadas: ${aprobadas.length} · Filas: ${filasAdecco.length}`],
+      ["Cantidad = horas reportadas + ajuste de ese tipo de hora."],
+    ]), "Información");
+    escribirLibro(wb, `adecco_novedades_${desde}_${hasta}.xlsx`);
+    toast.success(`${filasAdecco.length} filas de ${aprobadas.length} personas aprobadas`);
+  }
+
   function exportar() {
     descargarCsv(
       `conciliacion_novedades_${desde}_${hasta}`,
@@ -250,6 +303,11 @@ export function ConciliacionNovedades({
           ) : null}
         </div>
         <div className="flex gap-2">
+          {acceso.can("novedades", "exportar_adecco") ? (
+            <Button variant="outline" size="sm" onClick={() => void exportarAdecco()} title="Solo las personas aprobadas: una fila por tipo de hora">
+              <FileSpreadsheet className="size-4" /> Exportar Adecco ({aprobadas.length} aprobadas)
+            </Button>
+          ) : null}
           {acceso.can("novedades", "exportar") ? (
             <Button variant="outline" size="sm" onClick={exportar} disabled={!conHoras.length}>
               <Download className="size-4" /> Exportar

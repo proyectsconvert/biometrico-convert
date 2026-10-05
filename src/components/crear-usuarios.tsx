@@ -2,6 +2,7 @@ import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { useServerFn } from "@tanstack/react-start";
 import * as XLSX from "xlsx";
+import { escribirLibro } from "@/lib/exportar";
 import {
   ArrowRight, Briefcase, Check, CheckCircle2, Download, Eye, EyeOff, FileSpreadsheet, Headphones, Loader2,
   PencilLine, Search, ShieldCheck, Upload, UserCog, UserPlus, Users, Wallet, Wand2, X, XCircle,
@@ -50,7 +51,7 @@ const PLANTILLAS: Record<GrupoRol, { titulo: string; icono: ReactNode; columnas:
     columnas: ["correo", "nombre", "contrasena", "rol", "campana", "cedula"],
     ayuda: [
       "cedula: documento del empleado al que se vincula. Si el empleado no existe, o ya está vinculado a otro usuario, no se crea: créalo o revísalo en Empleados.",
-      "campana: máximo una. Vacía = solo ve su propia información; con campaña ve a las personas de esa campaña.",
+      "campana: máximo una, solo informativa. El asesor siempre ve únicamente su propia información.",
     ],
   },
 };
@@ -372,7 +373,7 @@ function NuevoUsuarioDialog({ onClose, alTerminar }: { onClose: () => void; alTe
                     <Select value={campanaAsesor} onValueChange={setCampanaAsesor}>
                       <SelectTrigger><SelectValue /></SelectTrigger>
                       <SelectContent>
-                        <SelectItem value={SIN_CAMPANA}>Sin campaña (solo ve lo suyo)</SelectItem>
+                        <SelectItem value={SIN_CAMPANA}>Sin campaña</SelectItem>
                         {campanas.map((c) => <SelectItem key={c.id} value={c.id}>{c.name}</SelectItem>)}
                       </SelectContent>
                     </Select>
@@ -466,7 +467,7 @@ function CargaMasivaDialog({ onClose, alTerminar }: { onClose: () => void; alTer
       [""],
       [LEYENDA],
     ]), "Instrucciones");
-    XLSX.writeFile(wb, `plantilla_usuarios_${tipo}.xlsx`);
+    escribirLibro(wb, `plantilla_usuarios_${tipo}.xlsx`);
     toast.info("Plantilla descargada", { description: AVISO });
   }
 
@@ -645,7 +646,7 @@ function EdicionMasivaDialog({ onClose, alTerminar }: { onClose: () => void; alT
         [""],
         [LEYENDA],
       ]), "Instrucciones");
-      XLSX.writeFile(wb, `usuarios_${new Date().toISOString().slice(0, 10)}.xlsx`);
+      escribirLibro(wb, `usuarios_${new Date().toISOString().slice(0, 10)}.xlsx`);
       toast.info(`${usuarios.length} usuarios descargados`, { description: AVISO });
     } catch (e) {
       toast.error("No se pudo descargar", { description: (e as Error).message });
