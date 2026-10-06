@@ -2,7 +2,9 @@
  * Reproceso del histórico biométrico en segundo plano (corre en el servidor, no en el navegador).
  *
  * - Conexión directa a Postgres si existe DATABASE_URL (sin Cloudflare ni límite de 100 s, lotes
- *   grandes); si no, por la API de Supabase (SUPABASE_URL, idealmente la local http://127.0.0.1:8040).
+ *   grandes); si no, por la API de Supabase (REPROCESO_SUPABASE_URL, idealmente la local
+ *   http://127.0.0.1:8040; si falta, SUPABASE_URL). Por la API las llamadas se mantienen cortas y,
+ *   si un proxy corta la conexión, se espera a que la base termine y el tramo se parte en dos.
  * - Estado por archivo y por tramo en `reprocess_jobs`: se puede cerrar la pestaña, y si el
  *   servidor se reinicia el trabajo se reanuda donde iba.
  * - Reintentos con espera creciente y una segunda pasada para los archivos que fallen. Ningún
@@ -12,6 +14,7 @@ import { randomUUID } from "node:crypto";
 import { createClient, type SupabaseClient } from "@supabase/supabase-js";
 import postgres from "postgres";
 import { dividirLineaCsv, parsearFilas } from "@/lib/biometria";
+import { esCorte, mensajeLimpio } from "@/lib/errores-red";
 
 type EstadoArchivo = {
   nombre: string;
@@ -29,6 +32,12 @@ type Tramo = {
   intentos: number;
   error?: string;
   segundos?: number;
+  /** Eventos ya reconstruidos (un reintento solo repite las jornadas). */
+  eventos_ok?: boolean;
+  /** Días de jornadas a recalcular (si el tramo se partió, el último pedazo recalcula todos). */
+  jornadas_desde?: string;
+  jornadas_hasta?: string;
+  jornadas_ok_hasta?: string;
 };
 type Trabajo = {
   id: string;
@@ -104,7 +113,12 @@ async function directa(): Promise<SqlDirecta | null> {
 let api: SupabaseClient | undefined;
 function clienteApi(): SupabaseClient {
   if (api) return api;
-  const url = process.env["SUPABASE_URL"] || process.env["VITE_SUPABASE_URL"];
+  // REPROCESO_SUPABASE_URL: la API local del mismo servidor (p. ej. http://127.0.0.1:8040), sin
+  // pasar por Cloudflare. Solo la usa este proceso; el navegador sigue con la dirección pública.
+  const url =
+    process.env["REPROCESO_SUPABASE_URL"] ||
+    process.env["SUPABASE_URL"] ||
+    process.env["VITE_SUPABASE_URL"];
   const key = process.env["SUPABASE_SERVICE_ROLE_KEY"] || process.env["SERVICE_ROLE_KEY"];
   if (!url || !key) throw new Error("Falta SUPABASE_URL o la llave de servicio en el servidor.");
   api = createClient(url, key, { auth: { persistSession: false, autoRefreshToken: false } });
@@ -201,28 +215,76 @@ async function tomar(id: string): Promise<boolean> {
 }
 
 class Cancelado extends Error {}
+/** La conexión se cortó y conviene partir el tramo en pedazos más pequeños. */
+class Corte extends Error {}
 
 /* ------------------------------ Pasos ------------------------------ */
+
+/**
+ * Tras un corte la consulta sigue corriendo en la base con el candado de la empresa: se espera a
+ * que termine en vez de encimar otro intento detrás (eso hacía que cada reintento tardara más).
+ */
+async function esperarBaseLibre(t: Trabajo) {
+  const limite = Date.now() + 30 * 60_000;
+  let avisado = false;
+  while (Date.now() < limite) {
+    if (t.status !== "en_curso") throw new Cancelado();
+    let ocupado: boolean;
+    try {
+      ocupado = await llamar<boolean>(
+        "reproceso_ocupado",
+        { _tenant: t.tenant_id },
+        { _tenant: "uuid" },
+      );
+    } catch (e) {
+      // Sin la función (migración 0052) o sin conexión: una espera prudente y se sigue
+      console.warn("[reproceso] no se pudo consultar si la base está ocupada:", mensajeLimpio(e));
+      await dormir(60_000);
+      return;
+    }
+    if (!ocupado) return;
+    if (!avisado) {
+      avisado = true;
+      t.detalle = `${t.detalle ?? ""} · esperando a que la base termine lo que quedó en curso`;
+      await guardar(t, true);
+    }
+    await dormir(10_000);
+  }
+}
+
+type OpcionesReintento = {
+  /** Antes de cada intento, esperar a que nada más use el candado de la empresa. */
+  esperarLibre?: boolean;
+  /** Ante un corte, no reintentar igual: lanzar Corte para partir el tramo. */
+  partirAlCortarse?: boolean;
+};
 
 async function conReintentos<T>(
   t: Trabajo,
   etiqueta: string,
   fn: () => Promise<T>,
   intentos = ESPERAS.length + 1,
+  op: OpcionesReintento = {},
 ): Promise<T> {
-  let ultimo: unknown;
+  let ultimo: Error | undefined;
   for (let i = 0; i < intentos; i++) {
     if (t.status !== "en_curso") throw new Cancelado();
+    if (op.esperarLibre) await esperarBaseLibre(t);
     try {
       return await fn();
     } catch (e) {
       if (e instanceof Cancelado) throw e;
-      ultimo = e;
-      console.warn(`[reproceso] ${etiqueta}: intento ${i + 1} falló: ${(e as Error).message}`);
+      const msg = mensajeLimpio(e);
+      ultimo = new Error(msg);
+      console.warn(`[reproceso] ${etiqueta}: intento ${i + 1} falló: ${msg}`);
+      if (op.partirAlCortarse && esCorte(msg)) {
+        if (op.esperarLibre) await esperarBaseLibre(t);
+        throw new Corte(msg);
+      }
       if (i < intentos - 1) await dormir(ESPERAS[i] ?? 30_000);
     }
   }
-  throw ultimo;
+  throw ultimo ?? new Error(`${etiqueta}: falló`);
 }
 
 async function descargarYLeer(imp: Import) {
@@ -260,7 +322,12 @@ async function verificarORecargar(imp: Import, directaOk: boolean, releerTodo: b
   if (!releerTodo && (await contarCrudo(imp.id)) === filas.length) {
     await db
       .from("biometric_imports")
-      .update({ rows_raw: filas.length, rows_found: filas.length })
+      .update({
+        rows_raw: filas.length,
+        rows_found: filas.length,
+        status: "completado",
+        error_message: null,
+      })
       .eq("id", imp.id);
     return { filas: filas.length, releido: false };
   }
@@ -305,7 +372,8 @@ async function verificarORecargar(imp: Import, directaOk: boolean, releerTodo: b
   if (n !== filas.length) throw new Error(`Quedaron ${n} de ${filas.length} filas`);
   await db
     .from("biometric_imports")
-    .update({ rows_raw: n, rows_found: n, error_message: null })
+    // La capa cruda del archivo ya está completa: no queda en «procesando» si el reproceso se detiene
+    .update({ rows_raw: n, rows_found: n, status: "completado", error_message: null })
     .eq("id", imp.id);
   return { filas: n, releido: true };
 }
@@ -391,6 +459,43 @@ async function calcularTramos(tenant: string, maxFilas: number, maxDias: number)
   return tramos;
 }
 
+const msDe = (iso: string) => Date.parse(`${iso}Z`);
+const isoDe = (ms: number) => new Date(ms).toISOString().slice(0, 19);
+const HORA = 3_600_000;
+const DIA = 24 * HORA;
+
+function etiquetaDe(ini: string, fin: string) {
+  if (ini.endsWith("T00:00:00") && fin.endsWith("T00:00:00"))
+    return `${ini.slice(0, 10)} a ${isoDe(msDe(fin) - 1000).slice(0, 10)}`;
+  return `${ini.slice(0, 16).replace("T", " ")}–${fin.slice(0, 16).replace("T", " ")}`;
+}
+
+/**
+ * Parte un tramo en dos mitades (por días; si es de un día, por horas). La primera solo reconstruye
+ * eventos; la segunda recalcula las jornadas de todo el rango original, cuando ya están completos.
+ * null si el tramo ya es de menos de dos horas.
+ */
+export function partirTramo(x: Tramo): [Tramo, Tramo] | null {
+  const a = msDe(x.ini);
+  const b = msDe(x.fin);
+  const unidad = b - a >= 2 * DIA ? DIA : HORA;
+  if (b - a < 2 * unidad) return null;
+  const mitad = isoDe(a + Math.round((b - a) / 2 / unidad) * unidad);
+  const base = { estado: "pendiente" as const, intentos: 0 };
+  return [
+    { ...base, ini: x.ini, fin: mitad, recalcular: false, etiqueta: etiquetaDe(x.ini, mitad) },
+    {
+      ...base,
+      ini: mitad,
+      fin: x.fin,
+      recalcular: x.recalcular,
+      etiqueta: etiquetaDe(mitad, x.fin),
+      jornadas_desde: x.jornadas_desde ?? x.ini.slice(0, 10),
+      jornadas_hasta: x.jornadas_hasta ?? isoDe(b - 1000).slice(0, 10),
+    },
+  ];
+}
+
 async function enParalelo<T>(lista: T[], n: number, fn: (x: T) => Promise<void>) {
   let i = 0;
   await Promise.all(
@@ -446,18 +551,6 @@ export async function ejecutarReproceso(id: string) {
     t.fase = "Verificando la capa cruda de cada archivo";
     t.detalle = `${imps.length} archivos`;
     await guardar(t, true);
-    // El conteo global solo lo usa la verificación; el reproceso compara archivo por archivo
-    const conteo = new Map(
-      (t.modo !== "verificar"
-        ? []
-        : await filasDe<{ import_id: string; filas: number | string }>(
-            "select import_id, count(*) as filas from public.biometric_raw where tenant_id = $1 group by import_id",
-            [t.tenant_id],
-            () => db.rpc("conteo_crudo_por_archivo", { _tenant: t.tenant_id }),
-          )
-      ).map((r) => [r.import_id, Number(r.filas)]),
-    );
-
     if (t.modo === "verificar") {
       // Solo lectura: cada archivo del almacenamiento contra su capa cruda
       t.fase = "Comparando cada archivo con su capa cruda";
@@ -471,7 +564,8 @@ export async function ejecutarReproceso(id: string) {
         }
         try {
           const filas = await conReintentos(t, imp.filename, () => descargarYLeer(imp));
-          const n = conteo.get(imp.id) ?? 0;
+          // Conteo por archivo (índice por import_id): nada de agregados sobre toda la capa cruda
+          const n = await conReintentos(t, imp.filename, () => contarCrudo(imp.id));
           t.archivos[imp.id] =
             n === filas.length
               ? { nombre: imp.filename, estado: "ok", intentos: 1, filas: n }
@@ -488,7 +582,7 @@ export async function ejecutarReproceso(id: string) {
             nombre: imp.filename,
             estado: "error",
             intentos: ESPERAS.length + 1,
-            error: (e as Error).message,
+            error: mensajeLimpio(e),
           };
         }
         t.hechos++;
@@ -552,7 +646,7 @@ export async function ejecutarReproceso(id: string) {
           };
         } catch (e) {
           if (e instanceof Cancelado) throw e;
-          t.archivos[imp.id] = { ...a, estado: "error", error: (e as Error).message };
+          t.archivos[imp.id] = { ...a, estado: "error", error: mensajeLimpio(e) };
         }
       };
       await enParalelo(cola, sql ? 6 : 4, async (imp) => {
@@ -580,79 +674,127 @@ export async function ejecutarReproceso(id: string) {
       }
     }
 
-    // 3. Capa limpia y jornadas por tramos (en orden cronológico)
+    // 3. Capa limpia y jornadas por tramos (en orden cronológico). Por la API cada llamada debe
+    //    caber holgada en los 100 s de Cloudflare: tramos pequeños, eventos y jornadas por separado,
+    //    y si aun así se corta, se espera a la base y el tramo se parte en dos.
     if (!t.tramos.length)
-      t.tramos = await calcularTramos(t.tenant_id, sql ? 500_000 : 200_000, sql ? 31 : 10);
+      t.tramos = await calcularTramos(t.tenant_id, sql ? 500_000 : 100_000, sql ? 31 : 7);
     t.fase = "Ordenando, limpiando y recalculando por tramos";
-    t.total = t.tramos.length;
-    t.hechos = t.tramos.filter((x) => x.estado === "ok").length;
-    await guardar(t, true);
-    for (const tramo of t.tramos) {
-      if (tramo.estado === "ok") continue;
+    const tiposTramo = {
+      _tenant: "uuid",
+      _ini: "timestamp",
+      _fin: "timestamp",
+      _recalcular: "boolean",
+    };
+    const diasPorLlamada = sql ? 31 : 5;
+    let k = 0;
+    while (k < t.tramos.length) {
+      const tramo = t.tramos[k]!;
+      if (tramo.estado === "ok") {
+        k++;
+        continue;
+      }
+      t.total = t.tramos.length;
+      t.hechos = t.tramos.filter((x) => x.estado === "ok").length;
       t.detalle = tramo.etiqueta;
-      await guardar(t);
+      await guardar(t, true);
       const t0 = Date.now();
       try {
-        await conReintentos(t, `tramo ${tramo.etiqueta}`, async () => {
-          tramo.intentos++;
-          await llamar(
-            "reconstruir_tramo",
-            {
-              _tenant: t.tenant_id,
-              _ini: tramo.ini,
-              _fin: tramo.fin,
-              _recalcular: tramo.recalcular,
+        if (!tramo.eventos_ok) {
+          await conReintentos(
+            t,
+            `tramo ${tramo.etiqueta}`,
+            async () => {
+              tramo.intentos++;
+              await llamar(
+                "reconstruir_tramo",
+                { _tenant: t.tenant_id, _ini: tramo.ini, _fin: tramo.fin, _recalcular: false },
+                tiposTramo,
+              );
             },
-            { _tenant: "uuid", _ini: "timestamp", _fin: "timestamp", _recalcular: "boolean" },
+            ESPERAS.length + 1,
+            { esperarLibre: true, partirAlCortarse: !sql && partirTramo(tramo) !== null },
           );
-        });
+          tramo.eventos_ok = true;
+          await guardar(t, true);
+        }
+        if (tramo.recalcular) {
+          const hasta = tramo.jornadas_hasta ?? isoDe(msDe(tramo.fin) - 1000).slice(0, 10);
+          let desde = tramo.jornadas_ok_hasta
+            ? isoDe(msDe(`${tramo.jornadas_ok_hasta}T00:00:00`) + DIA).slice(0, 10)
+            : (tramo.jornadas_desde ?? tramo.ini.slice(0, 10));
+          while (desde <= hasta) {
+            const fin = isoDe(
+              Math.min(
+                msDe(`${desde}T00:00:00`) + (diasPorLlamada - 1) * DIA,
+                msDe(`${hasta}T00:00:00`),
+              ),
+            ).slice(0, 10);
+            t.detalle = `${tramo.etiqueta} · jornadas ${desde} a ${fin}`;
+            await guardar(t);
+            await conReintentos(
+              t,
+              `jornadas ${desde} a ${fin}`,
+              () =>
+                llamar<number>(
+                  "recalcular_jornadas_tramo",
+                  { _tenant: t.tenant_id, _desde: desde, _hasta: fin },
+                  { _tenant: "uuid", _desde: "date", _hasta: "date" },
+                ),
+              ESPERAS.length + 1,
+              { esperarLibre: true },
+            );
+            tramo.jornadas_ok_hasta = fin;
+            desde = isoDe(msDe(`${fin}T00:00:00`) + DIA).slice(0, 10);
+          }
+        }
         tramo.estado = "ok";
         tramo.segundos = Math.round((Date.now() - t0) / 1000);
         delete tramo.error;
+        k++;
       } catch (e) {
         if (e instanceof Cancelado) throw e;
+        const partes = e instanceof Corte ? partirTramo(tramo) : null;
+        if (partes) {
+          // Se reemplaza por sus dos mitades y se sigue con la primera
+          t.tramos.splice(k, 1, ...partes);
+          console.warn(`[reproceso] tramo ${tramo.etiqueta} se partió en dos tras un corte`);
+          continue;
+        }
         tramo.estado = "error";
-        tramo.error = (e as Error).message;
+        tramo.error = mensajeLimpio(e);
         t.errores.push(`Tramo ${tramo.etiqueta}: ${tramo.error}`);
         throw new Error(
-          `El tramo ${tramo.etiqueta} falló tras varios intentos; usa «Reintentar» para continuar desde ahí.`,
+          `El tramo ${tramo.etiqueta} falló tras varios intentos; se retoma desde ahí.`,
         );
       }
-      t.hechos++;
-      await guardar(t);
     }
+    t.hechos = t.tramos.length;
+    t.total = t.tramos.length;
 
-    // 4. Cierre: estadísticas por archivo
+    // 4. Cierre archivo por archivo (estadísticas y estado final), sin agregados globales
     t.fase = "Cerrando: estadísticas por archivo";
     t.total = imps.length;
     t.hechos = 0;
     await guardar(t, true);
-    const cierre = await conReintentos(t, "cierre", () =>
-      llamar<{ filas_crudas: number; eventos_limpios: number }>(
-        "finalizar_reconstruccion",
-        { _tenant: t.tenant_id },
-        { _tenant: "uuid" },
-      ),
-    );
+    const cierre = { filas_crudas: 0, eventos_limpios: 0 };
+    const sinCrudo: string[] = [];
     await enParalelo(imps, sql ? 6 : 3, async (imp) => {
-      await conReintentos(t, `estadísticas ${imp.filename}`, () =>
-        llamar("estadisticas_importacion", { _import: imp.id }, { _import: "uuid" }),
+      const r = await conReintentos(t, `cierre ${imp.filename}`, () =>
+        llamar<{ filas_crudas: number; eventos_limpios: number }>(
+          "cerrar_importacion",
+          { _import: imp.id },
+          { _import: "uuid" },
+        ),
       );
+      cierre.filas_crudas += Number(r.filas_crudas) || 0;
+      cierre.eventos_limpios += Number(r.eventos_limpios) || 0;
+      if (!Number(r.filas_crudas)) sinCrudo.push(imp.filename);
       t.hechos++;
       await guardar(t);
     });
 
-    // 5. Verificación final
-    const final = new Map(
-      (
-        await filasDe<{ import_id: string; filas: number | string }>(
-          "select import_id, count(*) as filas from public.biometric_raw where tenant_id = $1 group by import_id",
-          [t.tenant_id],
-          () => db.rpc("conteo_crudo_por_archivo", { _tenant: t.tenant_id }),
-        )
-      ).map((r) => [r.import_id, Number(r.filas)]),
-    );
-    const sinCrudo = imps.filter((i) => !final.get(i.id)).map((i) => i.filename);
+    // 5. Resultado
     t.resultado = {
       ...cierre,
       archivos: imps.length,
@@ -682,7 +824,7 @@ export async function ejecutarReproceso(id: string) {
       if (t.status === "en_curso") t.status = "cancelado";
       t.fase = t.status === "interrumpido" ? "Lo tomó otro proceso del servidor" : "Cancelado";
     } else {
-      const msg = (e as Error).message;
+      const msg = mensajeLimpio(e);
       t.errores.push(msg);
       console.error("[reproceso]", msg);
       const espera = ESPERAS_AUTOMATICAS[t.reintentos];

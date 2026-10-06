@@ -33,6 +33,7 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
+import { mensajeLimpio } from "@/lib/errores-red";
 import { cn } from "@/lib/utils";
 
 type Mes = {
@@ -121,7 +122,9 @@ export function HistoricoBiometrico({ puedeReconstruir }: { puedeReconstruir: bo
           { description: trabajo.fase ?? "" },
         );
       else if (trabajo.status === "error")
-        toast.error("El reproceso se detuvo", { description: trabajo.errores.at(-1) ?? "" });
+        toast.error("El reproceso se detuvo", {
+          description: mensajeLimpio(trabajo.errores.at(-1) ?? ""),
+        });
       void qc.invalidateQueries();
     }
     setUltimoEstado(trabajo.status);
@@ -296,13 +299,20 @@ export function HistoricoBiometrico({ puedeReconstruir }: { puedeReconstruir: bo
                 <ul className="max-h-36 space-y-0.5 overflow-auto rounded-md border border-destructive/40 p-2 text-xs text-destructive">
                   {archivosConError.map((a) => (
                     <li key={a.nombre}>
-                      {a.nombre}: {a.error} ({a.intentos} intentos)
+                      {a.nombre}: {mensajeLimpio(a.error)} ({a.intentos} intentos)
                     </li>
                   ))}
-                  {trabajo.errores
-                    .filter((e) => !archivosConError.some((a) => e.startsWith(a.nombre)))
-                    .map((e, i) => (
-                      <li key={i}>{e}</li>
+                  {/* Los últimos errores distintos, ya resumidos (un corte del proxy llega como página HTML) */}
+                  {[
+                    ...new Set(
+                      trabajo.errores
+                        .filter((e) => !archivosConError.some((a) => e.startsWith(a.nombre)))
+                        .map((e) => mensajeLimpio(e)),
+                    ),
+                  ]
+                    .slice(-6)
+                    .map((e) => (
+                      <li key={e}>{e}</li>
                     ))}
                 </ul>
               ) : null}
