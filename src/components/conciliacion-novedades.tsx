@@ -408,6 +408,11 @@ function TarjetaPersona({ x, sug, tol, abierta, alAbrir, puedeAprobar, trabajand
   const e = ESTILO[sug.tipo];
   // Solo lo reportado: lo no reportado no se muestra (no se observa ni se considera para pago)
   const conceptos = conceptosReportados(x);
+  // Solo para Nómina (no va en la observación): horas que el biométrico clasifica en bloques que no se
+  // reportaron, p. ej. extras nocturnas; explican por qué la suma del detalle no coincide con un bloque
+  const otrosBloques = sug.tipo === "observar" || sug.tipo === "revisar"
+    ? x.conceptos.filter((c) => c.reportado <= 0 && c.biometrico > 0.01).map((c) => `${nombreConcepto(c.etiqueta)} ${h(c.biometrico)} h`)
+    : [];
   const extras = [x.ajustes ? `ajustes ${h(x.ajustes)} h` : "", x.bonificacion ? `bonificación ${h(x.bonificacion)}` : "", x.comisiones ? `comisiones ${h(x.comisiones)}` : ""].filter(Boolean);
   return (
     <Card className="overflow-hidden">
@@ -485,9 +490,14 @@ function TarjetaPersona({ x, sug, tol, abierta, alAbrir, puedeAprobar, trabajand
         </div>
       </div>
 
-      {extras.length || x.review_comment || x.observaciones ? (
+      {extras.length || otrosBloques.length || x.review_comment || x.observaciones ? (
         <div className="space-y-1 border-t px-4 py-2 text-xs text-muted-foreground">
           {extras.length ? <p><AlertTriangle className="mr-1 inline size-3.5" />No se validan con el biométrico: {extras.join(" · ")}.</p> : null}
+          {otrosBloques.length ? (
+            <p>
+              <AlertTriangle className="mr-1 inline size-3.5" />Solo para revisión: el biométrico clasifica además {otrosBloques.join(" · ")} (no reportadas). Las horas de más en horario nocturno son extras nocturnas y no se cuentan también como nocturnas; ver el total en el detalle por día.
+            </p>
+          ) : null}
           {x.review_comment ? <p><b>Comentario de revisión:</b> {x.review_comment}</p> : null}
           {x.observaciones ? <p><b>Observaciones de la plantilla:</b> {x.observaciones}</p> : null}
         </div>
@@ -617,9 +627,25 @@ function ObservarDialog({ estado, onClose, onGuardar }: { estado: { fila: FilaCo
 }
 
 type Dia = { work_date: string; novelty_type: string };
-type Jornada = { work_date: string; first_in: string | null; last_out: string | null; worked_minutes: number; overtime_minutes: number; night_minutes: number; sunday_holiday_minutes: number; status: string };
+type Jornada = { work_date: string; first_in: string | null; last_out: string | null; worked_minutes: number; overtime_minutes: number; overtime_night_minutes: number; night_minutes: number; sunday_holiday_minutes: number; status: string };
 
 const hm = (m: number) => (m ? `${Math.floor(m / 60)}:${String(m % 60).padStart(2, "0")}` : "—");
+/** Minutos a «h:mm (x,xx h)» para los totales, en las mismas unidades que la conciliación. */
+const hmDecimal = (m: number) => (m ? `${hm(m)} (${(m / 60).toLocaleString("es-CO", { maximumFractionDigits: 2 })} h)` : "—");
+/**
+ * Reparto legal de las horas de un día, igual que la conciliación: las horas que pasan de la
+ * jornada son extras; si caen en el horario nocturno son extras nocturnas (1,75) y no se cuentan
+ * también como recargo nocturno (0,35).
+ */
+const repartir = (j: Jornada | undefined) => {
+  const extraNoct = j?.overtime_night_minutes ?? 0;
+  return {
+    recargoNoct: Math.max(0, (j?.night_minutes ?? 0) - extraNoct),
+    extraDiurna: Math.max(0, (j?.overtime_minutes ?? 0) - extraNoct),
+    extraNoct,
+    domFest: j?.sunday_holiday_minutes ?? 0,
+  };
+};
 
 function DetalleDias({ fila }: { fila: FilaConciliacion }) {
   const datos = useQuery({
@@ -627,7 +653,7 @@ function DetalleDias({ fila }: { fila: FilaConciliacion }) {
     queryFn: async () => {
       const [n, a] = await Promise.all([
         supabase.from("novelty_entries").select("work_date, novelty_type").eq("document", fila.document).gte("work_date", fila.period_start).lte("work_date", fila.period_end),
-        dbAny.from("asistencia_reporte").select("work_date, first_in, last_out, worked_minutes, overtime_minutes, night_minutes, sunday_holiday_minutes, status").eq("document", fila.document).gte("work_date", fila.period_start).lte("work_date", fila.period_end),
+        dbAny.from("asistencia_reporte").select("work_date, first_in, last_out, worked_minutes, overtime_minutes, overtime_night_minutes, night_minutes, sunday_holiday_minutes, status").eq("document", fila.document).gte("work_date", fila.period_start).lte("work_date", fila.period_end),
       ]);
       if (n.error) throw n.error;
       if (a.error) throw a.error;
@@ -636,6 +662,20 @@ function DetalleDias({ fila }: { fila: FilaConciliacion }) {
   });
   if (datos.isLoading) return <p className="p-4 text-sm text-muted-foreground"><Loader2 className="mr-2 inline size-4 animate-spin" />Cruzando con el biométrico…</p>;
   const fechas = rangoFechas(fila.period_start, fila.period_end);
+  const totales = fechas.reduce(
+    (t, f) => {
+      const j = datos.data?.jornadas.get(f);
+      const x = repartir(j);
+      return {
+        horas: t.horas + (j?.worked_minutes ?? 0),
+        recargoNoct: t.recargoNoct + x.recargoNoct,
+        extraDiurna: t.extraDiurna + x.extraDiurna,
+        extraNoct: t.extraNoct + x.extraNoct,
+        domFest: t.domFest + x.domFest,
+      };
+    },
+    { horas: 0, recargoNoct: 0, extraDiurna: 0, extraNoct: 0, domFest: 0 },
+  );
   return (
     <div className="overflow-x-auto px-4 py-3">
       <table className="w-full text-xs">
@@ -646,8 +686,9 @@ function DetalleDias({ fila }: { fila: FilaConciliacion }) {
             <th className="font-medium">Entrada</th>
             <th className="font-medium">Salida</th>
             <th className="font-medium">Horas</th>
-            <th className="font-medium">Extra</th>
-            <th className="font-medium">Nocturnas</th>
+            <th className="font-medium" title="Horas nocturnas dentro de la jornada (recargo 0,35)">Nocturnas (0,35)</th>
+            <th className="font-medium" title="Horas de más en horario diurno">Extra diurna (1,25)</th>
+            <th className="font-medium" title="Horas de más en horario nocturno: no se cuentan también como nocturnas (0,35)">Extra nocturna (1,75)</th>
             <th className="font-medium">Dom/Fest</th>
             <th className="font-medium">Cruce</th>
           </tr>
@@ -674,15 +715,31 @@ function DetalleDias({ fila }: { fila: FilaConciliacion }) {
                 <td className="tabular-nums">{j?.first_in?.slice(11, 16) ?? "—"}</td>
                 <td className="tabular-nums">{j?.last_out?.slice(11, 16) ?? "—"}</td>
                 <td className="tabular-nums">{hm(j?.worked_minutes ?? 0)}</td>
-                <td className="tabular-nums">{hm(j?.overtime_minutes ?? 0)}</td>
-                <td className="tabular-nums">{hm(j?.night_minutes ?? 0)}</td>
-                <td className="tabular-nums">{hm(j?.sunday_holiday_minutes ?? 0)}</td>
+                <td className="tabular-nums">{hm(repartir(j).recargoNoct)}</td>
+                <td className="tabular-nums">{hm(repartir(j).extraDiurna)}</td>
+                <td className="tabular-nums">{hm(repartir(j).extraNoct)}</td>
+                <td className="tabular-nums">{hm(repartir(j).domFest)}</td>
                 <td className={cn(revisar ? "font-medium text-amber-700 dark:text-amber-400" : "text-muted-foreground")}>{alerta ?? "✓"}</td>
               </tr>
             );
           })}
         </tbody>
+        <tfoot>
+          <tr className="border-t-2 font-medium">
+            <td className="py-1.5" colSpan={4}>Total del periodo (lo que usa la conciliación)</td>
+            <td className="tabular-nums">{hm(totales.horas)}</td>
+            <td className="tabular-nums">{hmDecimal(totales.recargoNoct)}</td>
+            <td className="tabular-nums">{hmDecimal(totales.extraDiurna)}</td>
+            <td className="tabular-nums">{hmDecimal(totales.extraNoct)}</td>
+            <td className="tabular-nums">{hmDecimal(totales.domFest)}</td>
+            <td />
+          </tr>
+        </tfoot>
       </table>
+      <p className="mt-2 text-[11px] text-muted-foreground">
+        Las horas que pasan de la jornada diaria son extras. Si caen en el horario nocturno (Reglas de cálculo) son extras nocturnas (1,75)
+        y no se cuentan también como nocturnas (0,35); si caen de día, son extras diurnas (1,25).
+      </p>
     </div>
   );
 }
