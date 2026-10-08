@@ -132,6 +132,8 @@ function Novedades() {
   const puedeCrear = acceso.can("novedades", "crear");
   const puedeAprobar = acceso.can("novedades", "aprobar");
   const puedeEliminar = acceso.can("novedades", "eliminar");
+  // Borrar plantillas cargadas: permiso propio (o el de eliminar novedades)
+  const puedeBorrarPlantillas = puedeEliminar || acceso.can("novedades", "eliminar_plantillas");
   const [conExcluidos, setConExcluidos] = useState(false);
   const [campanasSel, setCampanasSel] = useState<string[]>([]);
   const [personasSel, setPersonasSel] = useState<string[]>([]);
@@ -584,7 +586,7 @@ function Novedades() {
               { key: "d", header: "Días", cell: (r) => r.days_count },
               { key: "s", header: "Estado", cell: (r) => <Badge variant={r.status === "error" ? "destructive" : r.status === "procesado" ? "default" : "secondary"} title={r.error_message ?? ""}>{r.status}</Badge> },
               { key: "t", header: "Cargado", cell: (r) => new Date(r.created_at).toLocaleString("es-CO") },
-              { key: "x", header: "", cell: (r) => puedeEliminar ? (
+              { key: "x", header: "", cell: (r) => puedeBorrarPlantillas ? (
                 <Button size="sm" variant="ghost" onClick={async () => {
                   if (!confirm(`¿Eliminar la plantilla ${r.filename} y todas sus novedades?`)) return;
                   const { error } = await supabase.from("novelty_reports").delete().eq("id", r.id);

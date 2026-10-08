@@ -69,3 +69,45 @@ export function resultadoConciliacion(x: Cruce, tol: number): ResultadoConciliac
   if (conceptosConDiferenciaMenor(x, tol).length) return "advertencia";
   return "coherente";
 }
+
+export type HorasAdecco = { noct: number; ed: number; en: number };
+export type Movimiento = { de: keyof HorasAdecco; a: keyof HorasAdecco; horas: number };
+
+/** Lo que el biométrico clasifica en cada tipo, sin la bolsa de extras nocturnas de la conciliación. */
+export function biometricoReal(conceptos: ConceptoConciliacion[]): HorasAdecco {
+  const c = (k: string) => conceptos.find((x) => x.clave === k);
+  const real = (k: string) => Math.max(0, Number(c(k)?.biometrico ?? 0) - Number(c(k)?.de_extra_nocturna ?? 0));
+  return { noct: real("nocturnas"), ed: real("extra_diurnas"), en: Number(c("extra_nocturnas")?.biometrico ?? 0) };
+}
+
+/**
+ * Reparte las horas reportadas (y aprobadas) en el recargo que les da el biométrico, hora por hora:
+ * 1. en cada tipo se queda lo que el biométrico respalda;
+ * 2. lo que sobra pasa al tipo donde el biométrico tiene horas libres: nocturnas o extras diurnas que
+ *    en realidad fueron extras nocturnas → 1,75; extras nocturnas que fueron nocturnas o extras
+ *    diurnas → 0,35 o 1,25;
+ * 3. lo que el biométrico no puede reclasificar se queda como se reportó (Nómina ya lo aprobó).
+ * El total de horas nunca cambia.
+ */
+export function reclasificarHoras(rep: HorasAdecco, bio: HorasAdecco) {
+  const r2 = (v: number) => Math.round(v * 100) / 100;
+  const queda = { noct: Math.min(rep.noct, bio.noct), ed: Math.min(rep.ed, bio.ed), en: Math.min(rep.en, bio.en) };
+  const sobra = { noct: rep.noct - queda.noct, ed: rep.ed - queda.ed, en: rep.en - queda.en };
+  const libre = { noct: bio.noct - queda.noct, ed: bio.ed - queda.ed, en: bio.en - queda.en };
+  const final = { ...rep };
+  const movimientos: Movimiento[] = [];
+  const mover = (de: keyof HorasAdecco, a: keyof HorasAdecco) => {
+    const h = r2(Math.min(sobra[de], libre[a]));
+    if (h <= 0) return;
+    sobra[de] -= h;
+    libre[a] -= h;
+    final[de] = r2(final[de] - h);
+    final[a] = r2(final[a] + h);
+    movimientos.push({ de, a, horas: h });
+  };
+  mover("noct", "en");
+  mover("ed", "en");
+  mover("en", "noct");
+  mover("en", "ed");
+  return { final, movimientos };
+}

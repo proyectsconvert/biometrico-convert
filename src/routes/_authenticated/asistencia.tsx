@@ -21,6 +21,8 @@ import { cn } from "@/lib/utils";
 
 import { MultiSelectFilter } from "@/components/multi-select-filter";
 import { useFiltroCampanaPersonas } from "@/lib/filtro-personas";
+import { useVeHoras } from "@/lib/desglose-horas";
+import { DesgloseJornada } from "@/components/desglose-jornada";
 import { FILTRO_PERSONAL_INICIAL, FiltrosPersonal, type FiltroPersonal } from "@/components/filtros-personal";
 
 export const Route = createFileRoute("/_authenticated/asistencia")({
@@ -46,6 +48,7 @@ type Fila = {
   expected_minutes: number | null;
   late_minutes: number | null;
   overtime_minutes: number;
+  overtime_night_minutes: number;
   night_minutes: number;
   sunday_holiday_minutes: number;
   is_rest_day: boolean;
@@ -75,7 +78,7 @@ type Filtros = {
 };
 
 const COLUMNAS =
-  "id, work_date, document, full_name, position, employer_name, campaign_name, cost_center_name, shift_name, first_in, last_out, worked_minutes, expected_minutes, late_minutes, overtime_minutes, night_minutes, sunday_holiday_minutes, is_rest_day, is_manual, status, en_reportes, stay_minutes, break_applied_minutes";
+  "id, work_date, document, full_name, position, employer_name, campaign_name, cost_center_name, shift_name, first_in, last_out, worked_minutes, expected_minutes, late_minutes, overtime_minutes, overtime_night_minutes, night_minutes, sunday_holiday_minutes, is_rest_day, is_manual, status, en_reportes, stay_minutes, break_applied_minutes";
 
 const ESTADOS: Record<string, { label: string; clase: string }> = {
   completa: { label: "Completa", clase: "bg-emerald-600 text-white hover:bg-emerald-600" },
@@ -115,6 +118,8 @@ function aplicarFiltros(q: any, f: Filtros) {
 
 function Asistencia() {
   const acceso = useAccess();
+  // Extras, nocturnas y recargos: solo Super Administrador, Administrador y Nómina
+  const veHoras = useVeHoras();
   const qc = useQueryClient();
   const [f, setF] = useState<Filtros>({
     desde: fechaLocal(),
@@ -263,8 +268,14 @@ function Asistencia() {
           descanso_descontado: horas(x.break_applied_minutes),
           horas_trabajadas: horas(x.worked_minutes),
           horas_esperadas: horas(x.expected_minutes),
-          horas_extra: horas(x.overtime_minutes),
-          horas_nocturnas: horas(x.night_minutes),
+          ...(veHoras
+            ? {
+                horas_extra_total: horas(x.overtime_minutes),
+                extra_diurna_125: horas(Math.max(0, x.overtime_minutes - (x.overtime_night_minutes ?? 0))),
+                extra_nocturna_175: horas(x.overtime_night_minutes ?? 0),
+                recargo_nocturno_035: horas(Math.max(0, x.night_minutes - (x.overtime_night_minutes ?? 0))),
+              }
+            : {}),
           horas_dom_festivo: horas(x.sunday_holiday_minutes),
           minutos_tarde: x.late_minutes ?? 0,
           estado: ESTADOS[x.status]?.label ?? x.status,
@@ -427,7 +438,7 @@ function Asistencia() {
         onOrden={(o) => { setOrden(o); setPagina(0); }}
         expandida={abierta}
         onFilaClick={(x) => setAbierta((a) => (a === x.id ? null : x.id))}
-        detalle={(x) => <MarcacionesDelDia fila={x} />}
+        detalle={(x) => <MarcacionesDelDia fila={x} veHoras={veHoras} />}
         vacio="No hay jornadas para estos filtros. Si acabas de importar, pulsa Recalcular o revisa el rango de fechas."
         columnas={[
           { key: "x", header: "", className: "w-6", cell: (x) => (abierta === x.id ? <ChevronDown className="size-4" /> : <ChevronRight className="size-4 text-muted-foreground" />) },
@@ -456,8 +467,21 @@ function Asistencia() {
           { key: "estancia", orden: "stay_minutes", header: "En empresa", cell: (x) => <span className="tabular-nums" title="Tiempo total entre la primera y la última marcación">{horas(x.stay_minutes)}</span> },
           { key: "desc", orden: "break_applied_minutes", header: "Descanso", cell: (x) => <span className="tabular-nums text-muted-foreground">{x.break_applied_minutes ? `−${horas(x.break_applied_minutes)}` : "—"}</span> },
           { key: "trab", orden: "worked_minutes", header: "Horas", cell: (x) => <span className="tabular-nums">{horas(x.worked_minutes)}</span> },
-          { key: "extra", orden: "overtime_minutes", header: "Extra", cell: (x) => <span className="tabular-nums">{x.overtime_minutes ? horas(x.overtime_minutes) : "—"}</span> },
-          { key: "noct", orden: "night_minutes", header: "Nocturnas", cell: (x) => <span className="tabular-nums">{x.night_minutes ? horas(x.night_minutes) : "—"}</span> },
+          // Total de extras; al desplegar la fila se ve el desglose (diurnas, nocturnas, recargos)
+          ...(veHoras
+            ? [
+                {
+                  key: "extra",
+                  orden: "overtime_minutes",
+                  header: "Extras",
+                  cell: (x: Fila) => (
+                    <span className="tabular-nums" title="Despliega la fila para ver el desglose por tipo y recargo">
+                      {x.overtime_minutes ? horas(x.overtime_minutes) : "—"}
+                    </span>
+                  ),
+                },
+              ]
+            : []),
           { key: "dom", orden: "sunday_holiday_minutes", header: "Dom/Fest.", cell: (x) => (x.sunday_holiday_minutes ? horas(x.sunday_holiday_minutes) : x.is_rest_day ? "descanso" : "—") },
           { key: "tarde", orden: "late_minutes", header: "Tarde", cell: (x) => (x.late_minutes ? `${x.late_minutes} min` : "—") },
           {
@@ -476,7 +500,7 @@ function Asistencia() {
   );
 }
 
-function MarcacionesDelDia({ fila }: { fila: Fila }) {
+function MarcacionesDelDia({ fila, veHoras }: { fila: Fila; veHoras: boolean }) {
   const fin = fila.last_out && fila.last_out > `${fila.work_date}T23:59:59` ? fila.last_out : `${fila.work_date}T23:59:59`;
   const eventos = useQuery({
     queryKey: ["marcaciones", "dia", fila.document, fila.work_date],
@@ -498,7 +522,8 @@ function MarcacionesDelDia({ fila }: { fila: Fila }) {
   if (!lista.length) return <p className="p-4 text-sm text-muted-foreground">No hay eventos del biométrico para esta jornada.</p>;
 
   return (
-    <div className="px-10 py-3">
+    <div className="space-y-3 px-10 py-3">
+      {veHoras ? <DesgloseJornada jornada={fila} /> : null}
       <ol className="space-y-1 border-l pl-4">
         {lista.map((e) => {
           const esEntrada = fila.first_in && e.event_at.slice(0, 19) === fila.first_in.slice(0, 19);

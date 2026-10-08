@@ -4,8 +4,10 @@ import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
 import {
   AlertTriangle, CalendarSearch, CheckCircle2, ChevronDown, ChevronRight, CircleHelp, Clock, Download, FileSpreadsheet, Loader2,
-  MessageSquareWarning, RotateCcw, SearchX, UserX, XCircle,
+  MessageSquareWarning, Pencil, RotateCcw, SearchX, UserX, XCircle,
 } from "lucide-react";
+import { Input } from "@/components/ui/input";
+import { Label } from "@/components/ui/label";
 import { supabase } from "@/integrations/supabase/client";
 import { dbAny } from "@/lib/db";
 import { useAccess } from "@/lib/session";
@@ -20,9 +22,10 @@ import { Card } from "@/components/ui/card";
 import { Textarea } from "@/components/ui/textarea";
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { cn } from "@/lib/utils";
-import { conceptosConDiferenciaMenor, conceptosQueFaltan, conceptosReportados, diasPorRevisar, notaBolsa } from "@/lib/conciliacion";
+import { useVeHoras } from "@/lib/desglose-horas";
+import { biometricoReal, conceptosConDiferenciaMenor, conceptosQueFaltan, conceptosReportados, diasPorRevisar, notaBolsa, reclasificarHoras, type ConceptoConciliacion, type HorasAdecco } from "@/lib/conciliacion";
 
-type Concepto = { clave: string; etiqueta: string; reportado: number; biometrico: number };
+type Concepto = ConceptoConciliacion;
 export type FilaConciliacion = {
   id: string;
   document: string;
@@ -232,10 +235,20 @@ export function ConciliacionNovedades({
     }
     const porId = new Map(aprobadas.map((x) => [x.id, x]));
     const filasAdecco: (string | number)[][] = [];
+    const reclasificadas: (string | number)[][] = [];
+    // Tipo de hora de la plantilla → clave de la reclasificación
+    const CLAVE: Record<string, keyof HorasAdecco> = { horas_nocturnas: "noct", horas_extra_diurnas: "ed", horas_extra_nocturnas: "en" };
+    const NOMBRE: Record<keyof HorasAdecco, string> = { noct: "Recargo Nocturno 35%", ed: "Horas Extras Diurnas 1.25%", en: "Horas Extras Nocturnas 1.75%" };
     for (const t of (data ?? []) as unknown as Record<string, string | number | null>[]) {
       const x = porId.get(String(t["id"]))!;
+      const n = (k: string) => Number(t[k] ?? 0);
+      // Hora por hora con su recargo correcto según el biométrico (el total no cambia)
+      const rep = { noct: n("horas_nocturnas"), ed: n("horas_extra_diurnas"), en: n("horas_extra_nocturnas") };
+      const { final, movimientos } = x.hay_biometria ? reclasificarHoras(rep, biometricoReal(x.conceptos)) : { final: rep, movimientos: [] };
+      for (const m of movimientos) reclasificadas.push([String(t["document"]), x.full_name ?? "", NOMBRE[m.de], NOMBRE[m.a], m.horas]);
       for (const tipo of ADECCO) {
-        const cantidad = Math.round((Number(t[tipo.horas] ?? 0) + Number(t[tipo.ajuste] ?? 0)) * 100) / 100;
+        const horas = CLAVE[tipo.horas] ? final[CLAVE[tipo.horas]!] : n(tipo.horas);
+        const cantidad = Math.round((horas + n(tipo.ajuste)) * 100) / 100;
         if (cantidad !== 0) filasAdecco.push([String(t["document"]), tipo.novedad, cantidad, x.campana_empleado ?? x.campaign_label ?? ""]);
       }
     }
@@ -244,11 +257,17 @@ export function ConciliacionNovedades({
     const ws = XLSX.utils.aoa_to_sheet([["Identificación", "Novedad", "cantidad", "observaciones"], ...filasAdecco]);
     ws["!cols"] = [{ wch: 16 }, { wch: 42 }, { wch: 10 }, { wch: 28 }];
     XLSX.utils.book_append_sheet(wb, ws, "Adecco");
+    if (reclasificadas.length) {
+      const wr = XLSX.utils.aoa_to_sheet([["Identificación", "Empleado", "Reportadas como", "Pasan a", "Horas"], ...reclasificadas]);
+      wr["!cols"] = [{ wch: 16 }, { wch: 36 }, { wch: 30 }, { wch: 30 }, { wch: 8 }];
+      XLSX.utils.book_append_sheet(wb, wr, "Reclasificadas");
+    }
     XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet([
       ["Novedades aprobadas para Adecco"],
       [`Periodo: ${desde} a ${hasta}`],
-      [`Personas aprobadas: ${aprobadas.length} · Filas: ${filasAdecco.length}`],
-      ["Cantidad = horas reportadas + ajuste de ese tipo de hora."],
+      [`Personas aprobadas: ${aprobadas.length} · Filas: ${filasAdecco.length} · Reclasificaciones: ${reclasificadas.length}`],
+      ["Una fila por persona y tipo de hora (recargo). Cantidad = horas + ajuste de ese tipo de hora."],
+      ["Las horas reportadas se reparten hora por hora en el recargo que les da el biométrico: si se reportaron como nocturnas (0,35) o extras diurnas (1,25) horas que fueron extras nocturnas, van en 1,75, y al revés. El total de horas no cambia; lo que el biométrico no puede reclasificar queda como se reportó. Ver la hoja «Reclasificadas»."],
     ]), "Información");
     escribirLibro(wb, `adecco_novedades_${desde}_${hasta}.xlsx`);
     toast.success(`${filasAdecco.length} filas de ${aprobadas.length} personas aprobadas`);
@@ -406,6 +425,7 @@ function TarjetaPersona({ x, sug, tol, abierta, alAbrir, puedeAprobar, trabajand
   alAprobar: () => void; alObservar: () => void; alReabrir: () => void;
 }) {
   const e = ESTILO[sug.tipo];
+  const [corregir, setCorregir] = useState(false);
   // Solo lo reportado: lo no reportado no se muestra (no se observa ni se considera para pago)
   const conceptos = conceptosReportados(x);
   // Solo para Nómina (no va en la observación): horas que el biométrico clasifica en bloques que no se
@@ -445,7 +465,13 @@ function TarjetaPersona({ x, sug, tol, abierta, alAbrir, puedeAprobar, trabajand
           <thead>
             <tr className="text-left text-xs text-muted-foreground">
               <th className="pb-1 font-medium">Horas</th>
-              <th className="pb-1 text-right font-medium">Reportadas</th>
+              <th className="pb-1 text-right font-medium">
+                {puedeAprobar ? (
+                  <button type="button" className="inline-flex items-center gap-1 hover:text-foreground" title="Corregir las horas reportadas" onClick={() => setCorregir(true)}>
+                    <Pencil className="size-3" /> Reportadas
+                  </button>
+                ) : "Reportadas"}
+              </th>
               <th className="pb-1 text-right font-medium">Biométrico</th>
               <th className="pb-1 pl-4 font-medium">Resultado</th>
             </tr>
@@ -458,7 +484,13 @@ function TarjetaPersona({ x, sug, tol, abierta, alAbrir, puedeAprobar, trabajand
               return (
                 <tr key={c.clave} className="border-t">
                   <td className="py-1.5">{nombreConcepto(c.etiqueta)}</td>
-                  <td className="py-1.5 text-right tabular-nums">{h(c.reportado)} h</td>
+                  <td
+                    className={cn("py-1.5 text-right tabular-nums", puedeAprobar && "cursor-pointer rounded hover:bg-muted")}
+                    title={puedeAprobar ? "Doble clic para corregir" : undefined}
+                    onDoubleClick={puedeAprobar ? () => setCorregir(true) : undefined}
+                  >
+                    {h(c.reportado)} h
+                  </td>
                   <td className="py-1.5 text-right tabular-nums">
                     {x.hay_biometria ? `${h(c.biometrico)} h` : "—"}
                     {x.hay_biometria && notaBolsa(c) ? <span className="block text-[10px] text-muted-foreground">{notaBolsa(c)}</span> : null}
@@ -510,7 +542,115 @@ function TarjetaPersona({ x, sug, tol, abierta, alAbrir, puedeAprobar, trabajand
       ) : null}
 
       {abierta ? <div className="border-t bg-muted/20"><DetalleDias fila={x} /></div> : null}
+      {corregir ? <CorregirHorasDialog fila={x} onClose={() => setCorregir(false)} /> : null}
     </Card>
+  );
+}
+
+const CAMPOS_HORAS: { campo: string; etiqueta: string }[] = [
+  { campo: "horas_nocturnas", etiqueta: "Nocturnas (0,35)" },
+  { campo: "horas_dom_fest_090", etiqueta: "Dominical/festivo (0,90)" },
+  { campo: "horas_dom_fest_190", etiqueta: "Dominical/festivo (1,90)" },
+  { campo: "horas_extra_diurnas", etiqueta: "Extras diurnas (1,25)" },
+  { campo: "horas_extra_nocturnas", etiqueta: "Extras nocturnas (1,75)" },
+];
+
+/**
+ * Nómina corrige las horas reportadas (p. ej. 17 → 14) sin subir otra plantilla. Queda en el
+ * historial de la revisión (antes → después y el motivo) y el supervisor lo ve en su resumen.
+ */
+function CorregirHorasDialog({ fila, onClose }: { fila: FilaConciliacion; onClose: () => void }) {
+  const qc = useQueryClient();
+  const [valores, setValores] = useState<Record<string, string> | null>(null);
+  const [originales, setOriginales] = useState<Record<string, number>>({});
+  const [motivo, setMotivo] = useState("");
+  const [guardando, setGuardando] = useState(false);
+
+  useEffect(() => {
+    void (async () => {
+      const { data, error } = await supabase
+        .from("novelty_totals")
+        .select(CAMPOS_HORAS.map((c) => c.campo).join(", "))
+        .eq("id", fila.id)
+        .maybeSingle();
+      if (error || !data) {
+        toast.error("No se pudieron leer las horas", { description: error?.message });
+        onClose();
+        return;
+      }
+      const d = data as unknown as Record<string, number | null>;
+      const o = Object.fromEntries(CAMPOS_HORAS.map((c) => [c.campo, Number(d[c.campo] ?? 0)]));
+      setOriginales(o);
+      setValores(Object.fromEntries(Object.entries(o).map(([k, v]) => [k, String(v)])));
+    })();
+  }, [fila.id, onClose]);
+
+  const cambios = valores
+    ? Object.fromEntries(
+        Object.entries(valores)
+          .map(([k, v]) => [k, Number(v.replace(",", "."))] as const)
+          .filter(([k, v]) => Number.isFinite(v) && Math.abs(v - (originales[k] ?? 0)) > 0.001),
+      )
+    : {};
+  const invalido = valores ? Object.values(valores).some((v) => !Number.isFinite(Number(v.replace(",", "."))) || Number(v.replace(",", ".")) < 0) : true;
+
+  async function guardar() {
+    setGuardando(true);
+    const { error } = await supabase.rpc("ajustar_horas_novedad" as never, { _total: fila.id, _cambios: cambios, _motivo: motivo || null } as never);
+    setGuardando(false);
+    if (error) {
+      toast.error("No se pudo corregir", { description: error.message });
+      return;
+    }
+    toast.success("Horas corregidas", { description: "Quedó en el historial de la revisión." });
+    void qc.invalidateQueries({ queryKey: ["nov-conciliacion"] });
+    void qc.invalidateQueries({ queryKey: ["nov-totales"] });
+    void qc.invalidateQueries({ queryKey: ["nov-historial"] });
+    onClose();
+  }
+
+  return (
+    <Dialog open onOpenChange={(v) => { if (!v && !guardando) onClose(); }}>
+      <DialogContent className="sm:max-w-md">
+        <DialogHeader>
+          <DialogTitle>Corregir horas reportadas</DialogTitle>
+          <DialogDescription>
+            {fila.full_name} · periodo {fechaCorta(fila.period_start)} al {fechaCorta(fila.period_end)}. El cambio queda en el historial y el supervisor lo ve.
+          </DialogDescription>
+        </DialogHeader>
+        {!valores ? (
+          <p className="text-sm text-muted-foreground"><Loader2 className="mr-2 inline size-4 animate-spin" />Cargando…</p>
+        ) : (
+          <div className="space-y-3">
+            {CAMPOS_HORAS.map((c) => (
+              <div key={c.campo} className="grid grid-cols-[1fr_7rem] items-center gap-3">
+                <Label htmlFor={c.campo} className="text-sm font-normal">
+                  {c.etiqueta}
+                  {cambios[c.campo] !== undefined ? <span className="ml-2 text-xs text-muted-foreground">antes {h(originales[c.campo] ?? 0)} h</span> : null}
+                </Label>
+                <Input
+                  id={c.campo}
+                  inputMode="decimal"
+                  className="text-right tabular-nums"
+                  value={valores[c.campo] ?? ""}
+                  onChange={(ev) => setValores((p) => ({ ...p!, [c.campo]: ev.target.value }))}
+                />
+              </div>
+            ))}
+            <div className="space-y-1">
+              <Label htmlFor="motivo" className="text-sm font-normal">Motivo (opcional)</Label>
+              <Textarea id="motivo" rows={2} value={motivo} onChange={(ev) => setMotivo(ev.target.value)} placeholder="Ej: el supervisor confirmó que eran 14 h" />
+            </div>
+          </div>
+        )}
+        <DialogFooter>
+          <Button variant="outline" onClick={onClose} disabled={guardando}>Cancelar</Button>
+          <Button onClick={() => void guardar()} disabled={guardando || invalido || !Object.keys(cambios).length}>
+            {guardando ? <Loader2 className="size-4 animate-spin" /> : null} Guardar corrección
+          </Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
   );
 }
 
@@ -657,6 +797,8 @@ const repartir = (j: Jornada | undefined) => {
 };
 
 function DetalleDias({ fila }: { fila: FilaConciliacion }) {
+  // Nocturnas y extras solo para Super Administrador, Administrador y Nómina
+  const veHoras = useVeHoras();
   const datos = useQuery({
     queryKey: ["nov-conciliacion", "dias", fila.id],
     queryFn: async () => {
@@ -695,9 +837,13 @@ function DetalleDias({ fila }: { fila: FilaConciliacion }) {
             <th className="font-medium">Entrada</th>
             <th className="font-medium">Salida</th>
             <th className="font-medium">Horas</th>
-            <th className="font-medium" title="Horas nocturnas dentro de la jornada (recargo 0,35)">Nocturnas (0,35)</th>
-            <th className="font-medium" title="Horas de más en horario diurno">Extra diurna (1,25)</th>
-            <th className="font-medium" title="Horas de más en horario nocturno: no se cuentan también como nocturnas (0,35)">Extra nocturna (1,75)</th>
+            {veHoras ? (
+              <>
+                <th className="font-medium" title="Horas nocturnas dentro de la jornada (recargo 0,35)">Nocturnas (0,35)</th>
+                <th className="font-medium" title="Horas de más en horario diurno">Extra diurna (1,25)</th>
+                <th className="font-medium" title="Horas de más en horario nocturno: no se cuentan también como nocturnas (0,35)">Extra nocturna (1,75)</th>
+              </>
+            ) : null}
             <th className="font-medium">Dom/Fest</th>
             <th className="font-medium">Cruce</th>
           </tr>
@@ -724,9 +870,13 @@ function DetalleDias({ fila }: { fila: FilaConciliacion }) {
                 <td className="tabular-nums">{j?.first_in?.slice(11, 16) ?? "—"}</td>
                 <td className="tabular-nums">{j?.last_out?.slice(11, 16) ?? "—"}</td>
                 <td className="tabular-nums">{hm(j?.worked_minutes ?? 0)}</td>
-                <td className="tabular-nums">{hm(repartir(j).recargoNoct)}</td>
-                <td className="tabular-nums">{hm(repartir(j).extraDiurna)}</td>
-                <td className="tabular-nums">{hm(repartir(j).extraNoct)}</td>
+                {veHoras ? (
+                  <>
+                    <td className="tabular-nums">{hm(repartir(j).recargoNoct)}</td>
+                    <td className="tabular-nums">{hm(repartir(j).extraDiurna)}</td>
+                    <td className="tabular-nums">{hm(repartir(j).extraNoct)}</td>
+                  </>
+                ) : null}
                 <td className="tabular-nums">{hm(repartir(j).domFest)}</td>
                 <td className={cn(revisar ? "font-medium text-amber-700 dark:text-amber-400" : "text-muted-foreground")}>{alerta ?? "✓"}</td>
               </tr>
@@ -737,15 +887,19 @@ function DetalleDias({ fila }: { fila: FilaConciliacion }) {
           <tr className="border-t-2 font-medium">
             <td className="py-1.5" colSpan={4}>Total del periodo (lo que usa la conciliación)</td>
             <td className="tabular-nums">{hm(totales.horas)}</td>
-            <td className="tabular-nums">{hmDecimal(totales.recargoNoct)}</td>
-            <td className="tabular-nums">{hmDecimal(totales.extraDiurna)}</td>
-            <td className="tabular-nums">{hmDecimal(totales.extraNoct)}</td>
+            {veHoras ? (
+              <>
+                <td className="tabular-nums">{hmDecimal(totales.recargoNoct)}</td>
+                <td className="tabular-nums">{hmDecimal(totales.extraDiurna)}</td>
+                <td className="tabular-nums">{hmDecimal(totales.extraNoct)}</td>
+              </>
+            ) : null}
             <td className="tabular-nums">{hmDecimal(totales.domFest)}</td>
             <td />
           </tr>
         </tfoot>
       </table>
-      <p className="mt-2 text-[11px] text-muted-foreground">
+      <p className={cn("mt-2 text-[11px] text-muted-foreground", !veHoras && "hidden")}>
         Las horas que pasan de la jornada diaria son extras. Si caen en el horario nocturno (Reglas de cálculo) son extras nocturnas (1,75)
         y no se cuentan también como nocturnas (0,35); si caen de día, son extras diurnas (1,25).
       </p>
