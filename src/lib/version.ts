@@ -28,7 +28,7 @@ export const HISTORIAL: EntradaVersion[] = [
       "Los días con horas anotadas («2 nocturnas», «7 dominicales», «8 domi + 3 noct») cuentan como días trabajados al cruzar con el biométrico.",
       "Conciliación por diferencia de horas: cuadra si el biométrico respalda igual o más; «Revisar días» solo si respalda un poco menos (dentro de la tolerancia).",
       "Las personas sin horas, bonificaciones ni comisiones reportadas quedan aprobadas automáticamente; el resumen muestra su detalle por día.",
-      "Filtros por cargo y por supervisor (jefe inmediato) en Panel, Control diario, Marcaciones, Novedades, Turnos y Empleados; solo personal activo por defecto, con opción de incluir inactivos.",
+      "Filtros por cargo y por supervisor (el usuario Supervisor o Coordinador de la campaña) en Panel, Control diario, Marcaciones, Novedades, Turnos y Empleados; solo personal activo por defecto, con opción de incluir inactivos.",
       "Los buscadores de personas filtran mientras se escribe (sin tildes y por palabras).",
       "Versión visible en el menú con su historial de cambios.",
     ],

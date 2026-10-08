@@ -13,7 +13,7 @@ import { SolicitarAjusteDialog, SolicitudesEmpleados, type EmpleadoSolicitud } f
 import { ComentariosEmpleadoDialog } from "@/components/comentarios-empleado";
 import { dbAny } from "@/lib/db";
 import { useAccess } from "@/lib/session";
-import { alfabetico, cargoBase, useEmpleadosFiltro } from "@/lib/filtro-personas";
+import { alfabetico, cargoBase, cubreCampana, useEmpleadosFiltro, useSupervisores } from "@/lib/filtro-personas";
 
 export const Route = createFileRoute("/_authenticated/empleados")({
   head: () => ({ meta: [{ title: "Empleados — Convert-IA" }] }),
@@ -48,13 +48,14 @@ function Empleados() {
     () => [...new Set((todos.data ?? []).map((e) => cargoBase(e.position)))].sort(alfabetico).map((c) => ({ value: c, label: c })),
     [todos.data],
   );
-  const supervisores = useMemo(() => {
-    const datos = todos.data ?? [];
-    const conEquipo = new Set(datos.map((e) => e.jefe_id).filter(Boolean));
-    return datos
-      .filter((e) => conEquipo.has(e.id) || (e.status === "activo" && /SUPERVIS|COORDINAD|JEFE|LIDER|LÍDER|MANAGER|GERENTE|DIRECTOR/i.test(e.position ?? "")))
-      .map((e) => ({ value: e.id, label: `${e.full_name} · ${cargoBase(e.position)}${e.campana ? ` · ${e.campana}` : ""}` }));
-  }, [todos.data]);
+  // Supervisor de una persona: usuario con rol Supervisor o Coordinador que tiene su campaña
+  const sups = useSupervisores();
+  const supervisores = useMemo(
+    () => (sups.data ?? []).map((s) => ({ value: s.user_id, label: `${s.nombre} · ${s.rol}` })),
+    [sups.data],
+  );
+  const supervisoresDe = (campaignId: string | null) =>
+    (sups.data ?? []).filter((s) => cubreCampana(s, campaignId)).map((s) => s.nombre);
 
   return (
     <>
@@ -63,7 +64,7 @@ function Empleados() {
       descripcion="Maestro de personal vinculado al documento del biométrico. El empleador define si la persona cuenta en el panel y los reportes."
       tabla="employees"
       modulo="empleados"
-      select="*, campaigns(name), cost_centers(name), shifts(name), employers(name, include_in_reports), jefe:jefe_id(full_name)"
+      select="*, campaigns(name), cost_centers(name), shifts(name), employers(name, include_in_reports)"
       orden="full_name"
       ordenAsc
       accionesExtra={<><SolicitudesEmpleados /><EmpleadosMasivo /></>}
@@ -137,8 +138,12 @@ function Empleados() {
         {
           key: "supervisor",
           label: "Supervisor",
-          opciones: [{ value: "_sin", label: "Sin supervisor asignado" }, ...supervisores],
-          aplicar: (f: Registro, v) => (v === "_sin" ? !f.jefe_id : f.jefe_id === v),
+          opciones: [{ value: "_sin", label: "Campaña sin supervisor" }, ...supervisores],
+          aplicar: (f: Registro, v) => {
+            if (v === "_sin") return !supervisoresDe(f.campaign_id).length;
+            const s = (sups.data ?? []).find((x) => x.user_id === v);
+            return Boolean(s && cubreCampana(s, f.campaign_id));
+          },
         },
       ]}
       accionesMasivas={(sel, limpiar) => soloSolicita ? (
@@ -154,7 +159,11 @@ function Empleados() {
           cell: (f) => <p className="font-medium">{texto(f.full_name)}</p>,
         },
         { key: "position", header: "Cargo", cell: (f) => <span className="text-xs">{texto(f.position)}</span> },
-        { key: "jefe", header: "Supervisor", orden: "jefe.full_name", cell: (f) => <span className="text-xs">{texto(f.jefe?.full_name)}</span> },
+        {
+          key: "supervisor",
+          header: "Supervisor",
+          cell: (f) => <span className="text-xs">{texto(supervisoresDe(f.campaign_id).join(", "))}</span>,
+        },
         {
           key: "employer",
           header: "Empleador",
@@ -195,14 +204,6 @@ function Empleados() {
           ],
         },
         { name: "position", label: "Cargo" },
-        {
-          name: "jefe_id",
-          label: "Jefe inmediato (supervisor)",
-          type: "select",
-          vacio: true,
-          options: supervisores,
-          ayuda: "Supervisor o coordinador a cargo. Permite filtrar por supervisor en Panel, Control diario, Novedades y Turnos.",
-        },
         { name: "email", label: "Correo", type: "email" },
         { name: "campaign_id", label: "Campaña", fuente: { tabla: "campaigns" } },
         { name: "cost_center_id", label: "Centro de costo", fuente: { tabla: "cost_centers" } },

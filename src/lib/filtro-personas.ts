@@ -17,8 +17,25 @@ export type EmpleadoFiltro = {
 /** Cargo agrupable: sin «(PERIODO DE PRUEBA)» ni espacios de más. */
 export const cargoBase = (cargo: string | null | undefined) =>
   (cargo ?? "").replace(/\(.*?\)/g, "").replace(/\s+/g, " ").trim().toUpperCase() || "SIN CARGO";
-/** Cargos que suelen tener personas a cargo (para la lista de supervisores). */
-const CARGO_CON_EQUIPO = /SUPERVIS|COORDINAD|JEFE|LIDER|LÍDER|MANAGER|GERENTE|DIRECTOR/i;
+/** Usuario con rol Supervisor o Coordinador y las campañas que tiene asignadas. */
+export type Supervisor = { user_id: string; nombre: string; rol: string; campaign_ids: string[]; todas: boolean };
+
+/** Supervisores y coordinadores de la empresa con sus campañas (Usuarios → Roles). */
+export function useSupervisores() {
+  return useQuery({
+    queryKey: ["supervisores-campanas"],
+    staleTime: 5 * 60_000,
+    queryFn: async () => {
+      const { data, error } = await supabase.rpc("supervisores_campanas" as never);
+      if (error) throw error;
+      return ((data as unknown as Supervisor[]) ?? []).sort((a, b) => alfabetico(a.nombre, b.nombre));
+    },
+  });
+}
+
+/** ¿El supervisor tiene a cargo esa campaña? */
+export const cubreCampana = (s: Supervisor, campaignId: string | null) =>
+  s.todas || (campaignId != null && s.campaign_ids.includes(campaignId));
 type Opcion = { value: string; label: string; sublabel?: string };
 
 /** Orden alfabético en español (tildes y ñ en su lugar, sin distinguir mayúsculas). */
@@ -67,7 +84,8 @@ export function useEmpleadosFiltro() {
  * Ambas listas van en orden alfabético. `campanasPor` indica si el filtro de campañas usa ids o
  * nombres; `valor`, qué dato identifica a la persona (id o documento).
  *
- * Además: cargo, supervisor (jefe inmediato) y personal activo. Por defecto solo se listan las
+ * Además: cargo, supervisor (el usuario con rol Supervisor o Coordinador que tiene asignada la
+ * campaña de la persona) y personal activo. Por defecto solo se listan las
  * personas activas (y las retiradas desde `desde`, para no perder a nadie en un corte de nómina);
  * `incluirInactivos` muestra a todos. Cargo y supervisor también filtran los datos: `personasConsulta`
  * es la lista de personas que la pantalla debe pasar a su consulta.
@@ -96,6 +114,7 @@ export function useFiltroCampanaPersonas({
   desde?: string;
 }) {
   const empleados = useEmpleadosFiltro();
+  const supervisores = useSupervisores();
   const campanaDe = (e: EmpleadoFiltro) => (campanasPor === "id" ? e.campaign_id : e.campana) ?? "";
   const vigente = (e: EmpleadoFiltro) =>
     incluirInactivos || e.status === "activo" || Boolean(desde && e.termination_date && e.termination_date >= desde);
@@ -109,11 +128,13 @@ export function useFiltroCampanaPersonas({
 
   const visibles = useMemo(() => {
     const setCargos = new Set(cargos);
-    const setJefes = new Set(jefes);
+    const elegidos = (supervisores.data ?? []).filter((s) => jefes.includes(s.user_id));
     return base.filter(
-      (e) => (!cargos.length || setCargos.has(cargoBase(e.position))) && (!jefes.length || (e.jefe_id != null && setJefes.has(e.jefe_id))),
+      (e) =>
+        (!cargos.length || setCargos.has(cargoBase(e.position))) &&
+        (!jefes.length || elegidos.some((s) => cubreCampana(s, e.campaign_id))),
     );
-  }, [base, cargos, jefes]);
+  }, [base, cargos, jefes, supervisores.data]);
 
   const opcionesCargos = useMemo(() => {
     const cuenta = new Map<string, number>();
@@ -123,19 +144,15 @@ export function useFiltroCampanaPersonas({
       .map(([c, n]) => ({ value: c, label: c, sublabel: `${n} persona${n === 1 ? "" : "s"}` }));
   }, [base]);
 
-  // Supervisores: quien ya tiene personas a cargo o tiene un cargo de supervisión (activos)
+  // Supervisores: usuarios con rol Supervisor o Coordinador, con sus campañas y su personal
   const opcionesJefes = useMemo(() => {
-    const lista = empleados.data ?? [];
-    const aCargo = new Map<string, number>();
-    for (const e of base) if (e.jefe_id) aCargo.set(e.jefe_id, (aCargo.get(e.jefe_id) ?? 0) + 1);
-    return lista
-      .filter((e) => aCargo.has(e.id) || (e.status === "activo" && CARGO_CON_EQUIPO.test(e.position ?? "")))
-      .map((e) => ({
-        value: e.id,
-        label: e.full_name,
-        sublabel: [cargoBase(e.position), e.campana, `${aCargo.get(e.id) ?? 0} a cargo`].filter(Boolean).join(" · "),
-      }));
-  }, [empleados.data, base]);
+    const nombreCampana = new Map((empleados.data ?? []).map((e) => [e.campaign_id, e.campana]));
+    return (supervisores.data ?? []).map((s) => {
+      const n = base.filter((e) => cubreCampana(s, e.campaign_id)).length;
+      const campanas = s.todas ? "toda la empresa" : s.campaign_ids.map((c) => nombreCampana.get(c) ?? "campaña").join(", ") || "sin campañas";
+      return { value: s.user_id, label: s.nombre, sublabel: `${s.rol} · ${campanas} · ${n} persona${n === 1 ? "" : "s"}` };
+    });
+  }, [supervisores.data, empleados.data, base]);
 
   const opcionesPersonas = useMemo(
     () => visibles.map((e) => ({
