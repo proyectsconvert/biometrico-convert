@@ -21,7 +21,8 @@ import {
 import { supabase } from "@/integrations/supabase/client";
 import { dbAny } from "@/lib/db";
 import { useAccess } from "@/lib/session";
-import { alfabetico } from "@/lib/filtro-personas";
+import { alfabetico, useFiltroCampanaPersonas } from "@/lib/filtro-personas";
+import { FILTRO_PERSONAL_INICIAL, FiltrosPersonal, type FiltroPersonal } from "@/components/filtros-personal";
 import { recalcularAsistencia } from "@/lib/asistencia.functions";
 import { PageHeader } from "@/components/app-shell";
 import { Paginador } from "@/components/simple-table";
@@ -1096,6 +1097,17 @@ function AsignacionTab({
   const [abierta, setAbierta] = useState(false);
   const [expandida, setExpandida] = useState<string | null>(null);
   const [semanaBase, setSemanaBase] = useState(() => lunesDe(hoy()));
+  const [fp, setFp] = useState<FiltroPersonal>(FILTRO_PERSONAL_INICIAL);
+  // Cargo y supervisor: asignar turnos a un cargo o al equipo de un supervisor
+  const { opcionesCargos, opcionesJefes, personasConsulta } = useFiltroCampanaPersonas({
+    opcionesCampanas: [],
+    campanas: [],
+    personas: [],
+    alCambiarPersonas: sinCambio,
+    valor: "id",
+    cargos: fp.cargos,
+    jefes: fp.jefes,
+  });
 
   // Solo personal activo: el inactivo no se puede programar
   const empleados = useQuery({
@@ -1112,18 +1124,19 @@ function AsignacionTab({
   });
 
   const filtrados = useMemo(() => {
-    const q = busqueda.trim().toLowerCase();
+    // Todas las palabras escritas, sin importar tildes ni el orden
+    const palabras = sinTildes(busqueda).split(" ").filter(Boolean);
+    const delFiltro = personasConsulta.length ? new Set(personasConsulta) : null;
     return (empleados.data ?? [])
       .filter((e) => campana === TODAS || campana === GENERAL || e.campaign_id === campana)
-      .filter(
-        (e) =>
-          !q ||
-          e.full_name.toLowerCase().includes(q) ||
-          e.document.includes(q) ||
-          (e.position ?? "").toLowerCase().includes(q),
-      )
+      .filter((e) => !delFiltro || delFiltro.has(e.id))
+      .filter((e) => {
+        if (!palabras.length) return true;
+        const t = sinTildes(`${e.full_name} ${e.document} ${e.position ?? ""}`);
+        return palabras.every((p) => t.includes(p));
+      })
       .sort((a, b) => alfabetico(a.full_name, b.full_name));
-  }, [empleados.data, campana, busqueda]);
+  }, [empleados.data, campana, busqueda, personasConsulta]);
   const visibles = filtrados.slice(pagina * tamano, (pagina + 1) * tamano);
   if (pagina > 0 && pagina * tamano >= filtrados.length) setPagina(0);
 
@@ -1168,6 +1181,18 @@ function AsignacionTab({
             setBusqueda(e.target.value);
             setPagina(0);
           }}
+        />
+        <FiltrosPersonal
+          compacto
+          conInactivos={false}
+          valor={fp}
+          onChange={(v) => {
+            setFp(v);
+            setPagina(0);
+          }}
+          opcionesCargos={opcionesCargos}
+          opcionesJefes={opcionesJefes}
+          triggerClassName="h-9 min-w-[170px]"
         />
         <div className="flex items-center gap-1">
           <Button
@@ -1475,6 +1500,12 @@ function HistorialAsignaciones({
     </div>
   );
 }
+
+/** Texto comparable para buscar: sin tildes, en minúsculas. */
+function sinTildes(t: string) {
+  return t.normalize("NFD").replace(/[\u0300-\u036f]/g, "").toLowerCase().replace(/\s+/g, " ").trim();
+}
+const sinCambio = () => undefined;
 
 function AsignarDialog({
   abierta,

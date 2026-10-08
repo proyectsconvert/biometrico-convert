@@ -16,6 +16,7 @@ import { Switch } from "@/components/ui/switch";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { MultiSelectFilter } from "@/components/multi-select-filter";
 import { useFiltroCampanaPersonas } from "@/lib/filtro-personas";
+import { FILTRO_PERSONAL_INICIAL, FiltrosPersonal, type FiltroPersonal } from "@/components/filtros-personal";
 
 export const Route = createFileRoute("/_authenticated/marcaciones")({
   head: () => ({ meta: [{ title: "Marcaciones — Convert-IA" }] }),
@@ -50,6 +51,7 @@ function Marcaciones() {
   const [hasta, setHasta] = useState(hoy());
   const [campanasSel, setCampanasSel] = useState<string[]>([]);
   const [personasSel, setPersonasSel] = useState<string[]>([]);
+  const [fp, setFp] = useState<FiltroPersonal>(FILTRO_PERSONAL_INICIAL);
   const [texto, setTexto] = useState("");
   const [busqueda, setBusqueda] = useState("");
   const [soloValidas, setSoloValidas] = useState(true);
@@ -69,7 +71,21 @@ function Marcaciones() {
 
   const todasCampanas = (campanas.data ?? []).map((c) => ({ value: c.id, label: c.name }));
   // Campañas y personas coherentes entre sí y en orden alfabético
-  const { opcionesCampanas, opcionesPersonas, placeholderCampanas, placeholderPersonas } = useFiltroCampanaPersonas({ opcionesCampanas: todasCampanas, campanas: campanasSel, personas: personasSel, alCambiarPersonas: setPersonasSel });
+  const { opcionesCampanas, opcionesPersonas, placeholderCampanas, placeholderPersonas, opcionesCargos, opcionesJefes, personasConsulta } = useFiltroCampanaPersonas({
+    opcionesCampanas: todasCampanas,
+    campanas: campanasSel,
+    personas: personasSel,
+    alCambiarPersonas: setPersonasSel,
+    cargos: fp.cargos,
+    jefes: fp.jefes,
+    incluirInactivos: fp.incluirInactivos,
+    desde,
+  });
+  // La búsqueda libre filtra mientras se escribe
+  useEffect(() => {
+    const t = setTimeout(() => setBusqueda(texto), 400);
+    return () => clearTimeout(t);
+  }, [texto]);
 
   // Abrir en el último día con eventos
   const ultimo = useQuery({
@@ -94,7 +110,7 @@ function Marcaciones() {
 
   useEffect(() => {
     setPagina(0);
-  }, [desde, hasta, campanasSel, personasSel, busqueda, soloValidas, conExcluidos]);
+  }, [desde, hasta, campanasSel, personasConsulta, busqueda, soloValidas, conExcluidos]);
 
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const filtrar = (q: any) => {
@@ -102,7 +118,7 @@ function Marcaciones() {
     if (soloValidas) q = q.eq("is_attendance", true);
     if (!conExcluidos) q = q.eq("en_reportes", true);
     if (campanasSel.length > 0) q = q.in("campaign_id", campanasSel);
-    if (personasSel.length > 0) q = q.in("document", personasSel);
+    if (personasConsulta.length > 0) q = q.in("document", personasConsulta);
 
     const t = busqueda.trim();
     if (t) {
@@ -117,7 +133,7 @@ function Marcaciones() {
   };
 
   const lista = useQuery({
-    queryKey: ["marcaciones", desde, hasta, campanasSel, personasSel, busqueda, soloValidas, conExcluidos, pagina, tamano],
+    queryKey: ["marcaciones", desde, hasta, campanasSel, personasConsulta, busqueda, soloValidas, conExcluidos, pagina, tamano],
     enabled: anclado,
     placeholderData: keepPreviousData,
     queryFn: async () => {
@@ -132,6 +148,8 @@ function Marcaciones() {
   const hayFiltrosActivos =
     campanasSel.length > 0 ||
     personasSel.length > 0 ||
+    fp.cargos.length > 0 ||
+    fp.jefes.length > 0 ||
     Boolean(busqueda) ||
     !soloValidas ||
     conExcluidos;
@@ -225,6 +243,7 @@ function Marcaciones() {
               popoverWidth="w-[340px]"
             />
           </div>
+          <FiltrosPersonal valor={fp} onChange={setFp} opcionesCargos={opcionesCargos} opcionesJefes={opcionesJefes} />
           <div className="min-w-56 flex-1 space-y-1.5">
             <Label htmlFor="q">Búsqueda libre</Label>
             <div className="relative">
@@ -249,6 +268,7 @@ function Marcaciones() {
                   setBusqueda("");
                   setCampanasSel([]);
                   setPersonasSel([]);
+                  setFp(FILTRO_PERSONAL_INICIAL);
                   setSoloValidas(true);
                   setConExcluidos(false);
                 }}

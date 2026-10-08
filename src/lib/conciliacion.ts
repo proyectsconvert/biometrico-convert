@@ -3,8 +3,9 @@
  *
  * - Solo se concilian los bloques de horas que se reportan (> 0). Lo que no se reporta no se muestra
  *   ni se menciona en observaciones: no debe leerse como horas pendientes de pago.
- * - Si el biométrico respalda igual o más de lo reportado, cuadra. Solo se revisa cuando se reporta
- *   más de lo que respalda el biométrico (por horas o por días con «Asiste» sin respaldo).
+ * - Si el biométrico respalda igual o más de lo reportado, cuadra.
+ * - Si respalda un poco menos (dentro de la tolerancia), se revisa; si respalda menos, más allá de la
+ *   tolerancia, no cuadra. Los días trabajados sin marcación son informativos: no cambian el resultado.
  */
 export type ConceptoConciliacion = {
   clave: string;
@@ -32,9 +33,16 @@ export const conceptosReportados = (x: Pick<Cruce, "conceptos">) =>
 export const conceptosQueFaltan = (x: Pick<Cruce, "conceptos">, tol: number) =>
   conceptosReportados(x).filter((c) => c.reportado - c.biometrico > tol);
 
+/** Bloques con una diferencia menor: el biométrico respalda un poco menos, dentro de la tolerancia. */
+export const conceptosConDiferenciaMenor = (x: Pick<Cruce, "conceptos">, tol: number) =>
+  conceptosReportados(x).filter((c) => {
+    const dif = c.reportado - c.biometrico;
+    return dif > 0.01 && dif <= tol;
+  });
+
 /**
- * Días donde lo reportado supera lo marcado: «Asiste» sin marcación o con una sola marcación.
- * Marcar en un día de novedad (o sin novedad) es más biométrico que reporte: no se revisa.
+ * Días trabajados sin marcación o con una sola marcación. Son informativos (se ven en el detalle por
+ * día): el resultado lo deciden las horas.
  */
 export function diasPorRevisar(x: Pick<Cruce, "asiste_sin_marca" | "asiste_incompleta">) {
   return [
@@ -47,6 +55,6 @@ export function resultadoConciliacion(x: Cruce, tol: number): ResultadoConciliac
   if (x.estado === "no_encontrado") return "no_encontrado";
   if (!x.hay_biometria || x.estado === "sin_biometria") return "sin_biometria";
   if (conceptosQueFaltan(x, tol).length) return "inconsistente";
-  if (diasPorRevisar(x).length) return "advertencia";
+  if (conceptosConDiferenciaMenor(x, tol).length) return "advertencia";
   return "coherente";
 }

@@ -1,5 +1,5 @@
 import { createFileRoute } from "@tanstack/react-router";
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { keepPreviousData, useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { ChevronDown, ChevronRight, Download, Loader2, RefreshCw, Search, X } from "lucide-react";
 import { toast } from "sonner";
@@ -21,6 +21,7 @@ import { cn } from "@/lib/utils";
 
 import { MultiSelectFilter } from "@/components/multi-select-filter";
 import { useFiltroCampanaPersonas } from "@/lib/filtro-personas";
+import { FILTRO_PERSONAL_INICIAL, FiltrosPersonal, type FiltroPersonal } from "@/components/filtros-personal";
 
 export const Route = createFileRoute("/_authenticated/asistencia")({
   head: () => ({ meta: [{ title: "Control diario — Convert-IA" }] }),
@@ -125,6 +126,12 @@ function Asistencia() {
     personas: [],
   });
   const [texto, setTexto] = useState("");
+  const [fp, setFp] = useState<FiltroPersonal>(FILTRO_PERSONAL_INICIAL);
+  // La búsqueda libre filtra mientras se escribe (con una pausa corta entre teclas)
+  useEffect(() => {
+    const t = setTimeout(() => setF((p) => (p.texto === texto ? p : { ...p, texto })), 400);
+    return () => clearTimeout(t);
+  }, [texto]);
   const [pagina, setPagina] = useState(0);
   const [TAMANO, setTamano] = useState(50);
   // Orden por defecto: fecha más reciente y nombre; clic en un encabezado para cambiarlo
@@ -153,7 +160,7 @@ function Asistencia() {
     }
   }, [anclado, ultimo.isSuccess, ultimo.data]);
 
-  useEffect(() => { setPagina(0); setAbierta(null); }, [f]);
+  useEffect(() => { setPagina(0); setAbierta(null); }, [f, fp]);
 
   const empleadores = useQuery({
     queryKey: ["employers", "opciones"],
@@ -174,14 +181,25 @@ function Asistencia() {
 
   const todasCampanas = (campanas.data ?? []).map((c) => ({ value: c.id, label: c.name }));
   // Campañas y personas coherentes entre sí y en orden alfabético
-  const { opcionesCampanas, opcionesPersonas, placeholderCampanas, placeholderPersonas } = useFiltroCampanaPersonas({ opcionesCampanas: todasCampanas, campanas: f.campanas, personas: f.personas, alCambiarPersonas: (personas) => setF((p) => ({ ...p, personas })) });
+  const { opcionesCampanas, opcionesPersonas, placeholderCampanas, placeholderPersonas, opcionesCargos, opcionesJefes, personasConsulta } = useFiltroCampanaPersonas({
+    opcionesCampanas: todasCampanas,
+    campanas: f.campanas,
+    personas: f.personas,
+    alCambiarPersonas: (personas) => setF((p) => ({ ...p, personas })),
+    cargos: fp.cargos,
+    jefes: fp.jefes,
+    incluirInactivos: fp.incluirInactivos,
+    desde: f.desde,
+  });
+  // Filtros de la consulta: cargo y supervisor se traducen a la lista de personas que cumplen
+  const fq = useMemo(() => ({ ...f, personas: personasConsulta }), [f, personasConsulta]);
 
   const lista = useQuery({
-    queryKey: ["asistencia", "lista", f, pagina, TAMANO, orden],
+    queryKey: ["asistencia", "lista", fq, pagina, TAMANO, orden],
     enabled: anclado,
     placeholderData: keepPreviousData,
     queryFn: async () => {
-      const q = ordenar(aplicarFiltros(dbAny.from("asistencia_reporte").select(COLUMNAS, { count: "exact" }), f))
+      const q = ordenar(aplicarFiltros(dbAny.from("asistencia_reporte").select(COLUMNAS, { count: "exact" }), fq))
         .range(pagina * TAMANO, pagina * TAMANO + TAMANO - 1);
       const { data, error, count } = await q;
       if (error) throw error;
@@ -191,11 +209,11 @@ function Asistencia() {
 
   // Conteo por estado con los mismos filtros (sin el filtro de estado)
   const resumen = useQuery({
-    queryKey: ["asistencia", "resumen", { ...f, estado: "todos" }],
+    queryKey: ["asistencia", "resumen", { ...fq, estado: "todos" }],
     enabled: anclado,
     placeholderData: keepPreviousData,
     queryFn: async () => {
-      const base = { ...f, estado: "todos" };
+      const base = { ...fq, estado: "todos" };
       const contar = async (estado: string) => {
         const { count, error } = await aplicarFiltros(dbAny.from("asistencia_reporte").select("id", { count: "exact", head: true }), { ...base, estado });
         if (error) throw error;
@@ -223,7 +241,7 @@ function Asistencia() {
     try {
       const todas: Fila[] = [];
       for (let i = 0; i < 100; i++) {
-        const { data, error } = await ordenar(aplicarFiltros(dbAny.from("asistencia_reporte").select(COLUMNAS), f))
+        const { data, error } = await ordenar(aplicarFiltros(dbAny.from("asistencia_reporte").select(COLUMNAS), fq))
           .range(i * 1000, i * 1000 + 999);
         if (error) throw error;
         todas.push(...((data ?? []) as Fila[]));
@@ -262,6 +280,8 @@ function Asistencia() {
   const hayFiltrosActivos =
     f.campanas.length > 0 ||
     f.personas.length > 0 ||
+    fp.cargos.length > 0 ||
+    fp.jefes.length > 0 ||
     f.personal !== "reportes" ||
     f.estado !== "todos" ||
     Boolean(f.texto);
@@ -328,6 +348,7 @@ function Asistencia() {
               popoverWidth="w-[340px]"
             />
           </div>
+          <FiltrosPersonal valor={fp} onChange={setFp} opcionesCargos={opcionesCargos} opcionesJefes={opcionesJefes} />
           <div className="space-y-1.5">
             <Label>Personal</Label>
             <Select value={f.personal} onValueChange={(v) => setF((p) => ({ ...p, personal: v }))}>
@@ -362,6 +383,7 @@ function Asistencia() {
                 variant="ghost"
                 onClick={() => {
                   setTexto("");
+                  setFp(FILTRO_PERSONAL_INICIAL);
                   setF((p) => ({
                     ...p,
                     texto: "",

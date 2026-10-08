@@ -18,6 +18,7 @@ import {
 } from "lucide-react";
 import { MultiSelectFilter } from "@/components/multi-select-filter";
 import { useEmpleadosFiltro, useFiltroCampanaPersonas } from "@/lib/filtro-personas";
+import { FILTRO_PERSONAL_INICIAL, FiltrosPersonal, type FiltroPersonal } from "@/components/filtros-personal";
 import { HiloComentarios } from "@/components/comentarios-empleado";
 import { HistorialCambios } from "@/components/historial-cambios";
 import { descargarPlantillaNovedades } from "@/lib/plantilla-novedades";
@@ -134,6 +135,7 @@ function Novedades() {
   const [conExcluidos, setConExcluidos] = useState(false);
   const [campanasSel, setCampanasSel] = useState<string[]>([]);
   const [personasSel, setPersonasSel] = useState<string[]>([]);
+  const [fp, setFp] = useState<FiltroPersonal>(FILTRO_PERSONAL_INICIAL);
 
   // Documentos del personal que no cuenta en reportes (seguridad, aseo, contratistas)
   const excluidos = useQuery({
@@ -156,7 +158,17 @@ function Novedades() {
 
   const todasCampanas = (campanas.data ?? []).map((c) => ({ value: c.name, label: c.name }));
   // Campañas y personas coherentes entre sí y en orden alfabético
-  const { opcionesCampanas, opcionesPersonas, placeholderCampanas, placeholderPersonas, documentosCampanas } = useFiltroCampanaPersonas({ opcionesCampanas: todasCampanas, campanas: campanasSel, campanasPor: "nombre", personas: personasSel, alCambiarPersonas: setPersonasSel });
+  const { opcionesCampanas, opcionesPersonas, placeholderCampanas, placeholderPersonas, documentosCampanas, opcionesCargos, opcionesJefes, personasConsulta } = useFiltroCampanaPersonas({
+    opcionesCampanas: todasCampanas,
+    campanas: campanasSel,
+    campanasPor: "nombre",
+    personas: personasSel,
+    alCambiarPersonas: setPersonasSel,
+    cargos: fp.cargos,
+    jefes: fp.jefes,
+    incluirInactivos: fp.incluirInactivos,
+    desde,
+  });
 
   // La búsqueda se aplica sola mientras se escribe
   useEffect(() => {
@@ -171,7 +183,7 @@ function Novedades() {
     : null;
 
   const entradas = useQuery({
-    queryKey: ["nov-entradas", desde, hasta, filtroCampana, personasSel, buscar],
+    queryKey: ["nov-entradas", desde, hasta, filtroCampana, personasConsulta, buscar],
     queryFn: () =>
       traerTodo<Entrada>((a, b) => {
         let q = supabase
@@ -183,7 +195,7 @@ function Novedades() {
           .order("work_date")
           .range(a, b);
         if (filtroCampana) q = q.or(filtroCampana);
-        if (personasSel.length > 0) q = q.in("document", personasSel);
+        if (personasConsulta.length > 0) q = q.in("document", personasConsulta);
         const t = buscar.trim();
         if (t) q = /^\d+$/.test(t) ? q.eq("document", t) : q.or(`full_name.ilike.%${t}%,campaign_label.ilike.%${t}%`);
         return q;
@@ -191,11 +203,11 @@ function Novedades() {
   });
 
   const totales = useQuery({
-    queryKey: ["nov-totales", desde, hasta, filtroCampana, personasSel, buscar],
+    queryKey: ["nov-totales", desde, hasta, filtroCampana, personasConsulta, buscar],
     queryFn: async () => {
       let q = supabase.from("novelty_totals").select("*").lte("period_start", hasta).gte("period_end", desde).order("full_name").limit(1000);
       if (filtroCampana) q = q.or(filtroCampana);
-      if (personasSel.length > 0) q = q.in("document", personasSel);
+      if (personasConsulta.length > 0) q = q.in("document", personasConsulta);
       const t = buscar.trim();
       if (t) q = /^\d+$/.test(t) ? q.eq("document", t) : q.or(`full_name.ilike.%${t}%,campaign_label.ilike.%${t}%`);
       const { data, error } = await q;
@@ -280,7 +292,7 @@ function Novedades() {
       const conNovedad = new Set((entradasVis ?? []).map((e) => e.document));
       let personas = emps.filter((e) => e.document && (e.status === "activo" || conNovedad.has(e.document)));
       if (campanasSel.length) personas = personas.filter((e) => campanasSel.includes(e.campaigns?.name ?? ""));
-      if (personasSel.length) personas = personas.filter((e) => personasSel.includes(e.document));
+      if (personasConsulta.length) personas = personas.filter((e) => personasConsulta.includes(e.document));
       if (!personas.length) { toast.error("No hay personal con los filtros actuales"); return; }
       const dias = new Map((entradasVis ?? []).map((e) => [`${e.document}|${e.work_date}`, e.novelty_type]));
       const tot = new Map<string, Record<string, unknown>>();
@@ -403,6 +415,7 @@ function Novedades() {
               popoverWidth="w-[340px]"
             />
           </div>
+          <FiltrosPersonal valor={fp} onChange={setFp} opcionesCargos={opcionesCargos} opcionesJefes={opcionesJefes} />
           <div className="min-w-56 flex-1 space-y-1.5">
             <Label htmlFor="q">Búsqueda libre</Label>
             <div className="relative">
@@ -417,7 +430,7 @@ function Novedades() {
             </div>
           </div>
           <div className="flex items-center gap-2">
-            {(campanasSel.length > 0 || personasSel.length > 0 || Boolean(buscar) || conExcluidos) && (
+            {(campanasSel.length > 0 || personasSel.length > 0 || fp.cargos.length > 0 || fp.jefes.length > 0 || Boolean(buscar) || conExcluidos) && (
               <Button
                 type="button"
                 variant="ghost"
@@ -426,6 +439,7 @@ function Novedades() {
                   setBuscar("");
                   setCampanasSel([]);
                   setPersonasSel([]);
+                  setFp(FILTRO_PERSONAL_INICIAL);
                   setConExcluidos(false);
                 }}
               >
@@ -462,7 +476,7 @@ function Novedades() {
         </TabsContent>
 
         <TabsContent value="conciliacion">
-          {puedeAprobar ? <ConciliacionNovedades desde={desde} hasta={hasta} puedeAprobar={puedeAprobar} campanas={campanasSel} personas={personasSel} buscar={buscar} documentosCampanas={documentosCampanas} /> : null}
+          {puedeAprobar ? <ConciliacionNovedades desde={desde} hasta={hasta} puedeAprobar={puedeAprobar} campanas={campanasSel} personas={personasConsulta} buscar={buscar} documentosCampanas={documentosCampanas} /> : null}
         </TabsContent>
 
         <TabsContent value="matriz">

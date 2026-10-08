@@ -1,5 +1,5 @@
 import { createFileRoute } from "@tanstack/react-router";
-import { useState } from "react";
+import { useMemo, useState } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
 import { Building2, MessageSquarePlus, MessageSquareText, UserCheck, UserX } from "lucide-react";
@@ -13,6 +13,7 @@ import { SolicitarAjusteDialog, SolicitudesEmpleados, type EmpleadoSolicitud } f
 import { ComentariosEmpleadoDialog } from "@/components/comentarios-empleado";
 import { dbAny } from "@/lib/db";
 import { useAccess } from "@/lib/session";
+import { alfabetico, cargoBase, useEmpleadosFiltro } from "@/lib/filtro-personas";
 
 export const Route = createFileRoute("/_authenticated/empleados")({
   head: () => ({ meta: [{ title: "Empleados — Convert-IA" }] }),
@@ -41,6 +42,20 @@ function Empleados() {
   });
   const lista = empleadores.data ?? [];
 
+  // Cargos (agrupados, sin «periodo de prueba») y supervisores para filtros y para asignar jefe
+  const todos = useEmpleadosFiltro();
+  const cargos = useMemo(
+    () => [...new Set((todos.data ?? []).map((e) => cargoBase(e.position)))].sort(alfabetico).map((c) => ({ value: c, label: c })),
+    [todos.data],
+  );
+  const supervisores = useMemo(() => {
+    const datos = todos.data ?? [];
+    const conEquipo = new Set(datos.map((e) => e.jefe_id).filter(Boolean));
+    return datos
+      .filter((e) => conEquipo.has(e.id) || (e.status === "activo" && /SUPERVIS|COORDINAD|JEFE|LIDER|LÍDER|MANAGER|GERENTE|DIRECTOR/i.test(e.position ?? "")))
+      .map((e) => ({ value: e.id, label: `${e.full_name} · ${cargoBase(e.position)}${e.campana ? ` · ${e.campana}` : ""}` }));
+  }, [todos.data]);
+
   return (
     <>
     <CrudPage
@@ -48,7 +63,7 @@ function Empleados() {
       descripcion="Maestro de personal vinculado al documento del biométrico. El empleador define si la persona cuenta en el panel y los reportes."
       tabla="employees"
       modulo="empleados"
-      select="*, campaigns(name), cost_centers(name), shifts(name), employers(name, include_in_reports)"
+      select="*, campaigns(name), cost_centers(name), shifts(name), employers(name, include_in_reports), jefe:jefe_id(full_name)"
       orden="full_name"
       ordenAsc
       accionesExtra={<><SolicitudesEmpleados /><EmpleadosMasivo /></>}
@@ -105,11 +120,25 @@ function Empleados() {
         {
           key: "estado",
           label: "Estado",
+          // Por defecto solo el personal activo; «Estado: todos» incluye a los inactivos
+          inicial: "activo",
           opciones: [
             { value: "activo", label: "Activo" },
             { value: "inactivo", label: "Inactivo" },
           ],
           aplicar: (f: Registro, v) => f.status === v,
+        },
+        {
+          key: "cargo",
+          label: "Cargo",
+          opciones: cargos,
+          aplicar: (f: Registro, v) => cargoBase(f.position) === v,
+        },
+        {
+          key: "supervisor",
+          label: "Supervisor",
+          opciones: [{ value: "_sin", label: "Sin supervisor asignado" }, ...supervisores],
+          aplicar: (f: Registro, v) => (v === "_sin" ? !f.jefe_id : f.jefe_id === v),
         },
       ]}
       accionesMasivas={(sel, limpiar) => soloSolicita ? (
@@ -122,13 +151,10 @@ function Empleados() {
         {
           key: "full_name",
           header: "Nombre",
-          cell: (f) => (
-            <div>
-              <p className="font-medium">{texto(f.full_name)}</p>
-              <p className="text-xs text-muted-foreground">{texto(f.position)}</p>
-            </div>
-          ),
+          cell: (f) => <p className="font-medium">{texto(f.full_name)}</p>,
         },
+        { key: "position", header: "Cargo", cell: (f) => <span className="text-xs">{texto(f.position)}</span> },
+        { key: "jefe", header: "Supervisor", orden: "jefe.full_name", cell: (f) => <span className="text-xs">{texto(f.jefe?.full_name)}</span> },
         {
           key: "employer",
           header: "Empleador",
@@ -169,6 +195,14 @@ function Empleados() {
           ],
         },
         { name: "position", label: "Cargo" },
+        {
+          name: "jefe_id",
+          label: "Jefe inmediato (supervisor)",
+          type: "select",
+          vacio: true,
+          options: supervisores,
+          ayuda: "Supervisor o coordinador a cargo. Permite filtrar por supervisor en Panel, Control diario, Novedades y Turnos.",
+        },
         { name: "email", label: "Correo", type: "email" },
         { name: "campaign_id", label: "Campaña", fuente: { tabla: "campaigns" } },
         { name: "cost_center_id", label: "Centro de costo", fuente: { tabla: "cost_centers" } },

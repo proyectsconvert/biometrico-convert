@@ -18,6 +18,12 @@ import {
   CommandSeparator,
 } from "@/components/ui/command";
 
+/** Texto comparable: sin tildes, en minúsculas y con espacios simples. */
+const normalizar = (t: string) =>
+  t.normalize("NFD").replace(/[\u0300-\u036f]/g, "").toLowerCase().replace(/\s+/g, " ").trim();
+/** Máximo de opciones dibujadas a la vez (con miles de personas, el resto aparece al escribir). */
+const MAX_VISIBLES = 200;
+
 export type MultiSelectOption = {
   value: string;
   label: string;
@@ -48,8 +54,23 @@ export function MultiSelectFilter({
   popoverWidth = "w-[300px]",
 }: MultiSelectFilterProps) {
   const [open, setOpen] = React.useState(false);
+  const [busqueda, setBusqueda] = React.useState("");
 
   const selectedSet = React.useMemo(() => new Set(selected), [selected]);
+
+  // Índice de búsqueda: nombre, detalle y valor (cédula), sin tildes
+  const indice = React.useMemo(
+    () => options.map((o) => ({ o, t: normalizar(`${o.label} ${o.sublabel ?? ""} ${o.value}`) })),
+    [options],
+  );
+  // Filtra mientras se escribe: deben aparecer todas las palabras, en cualquier orden.
+  // Las seleccionadas van primero para poder quitarlas.
+  const coincidencias = React.useMemo(() => {
+    const palabras = normalizar(busqueda).split(" ").filter(Boolean);
+    const lista = palabras.length ? indice.filter(({ t }) => palabras.every((p) => t.includes(p))) : indice;
+    return [...lista.filter(({ o }) => selectedSet.has(o.value)), ...lista.filter(({ o }) => !selectedSet.has(o.value))].map(({ o }) => o);
+  }, [indice, busqueda, selectedSet]);
+  const visibles = coincidencias.slice(0, MAX_VISIBLES);
 
   const toggleOption = (val: string) => {
     if (selectedSet.has(val)) {
@@ -76,7 +97,13 @@ export function MultiSelectFilter({
 
   return (
     <div className={cn("flex flex-col gap-1.5", className)}>
-      <Popover open={open} onOpenChange={setOpen}>
+      <Popover
+        open={open}
+        onOpenChange={(v) => {
+          setOpen(v);
+          if (!v) setBusqueda("");
+        }}
+      >
         <PopoverTrigger asChild>
           <Button
             variant="outline"
@@ -115,17 +142,17 @@ export function MultiSelectFilter({
           </Button>
         </PopoverTrigger>
         <PopoverContent className={cn("p-0 shadow-lg", popoverWidth)} align="start">
-          <Command>
-            <CommandInput placeholder={searchPlaceholder} />
+          <Command shouldFilter={false}>
+            <CommandInput placeholder={searchPlaceholder} value={busqueda} onValueChange={setBusqueda} />
             <CommandList className="max-h-64">
               <CommandEmpty>No se encontraron resultados.</CommandEmpty>
               <CommandGroup>
-                {options.map((option) => {
+                {visibles.map((option) => {
                   const isSelected = selectedSet.has(option.value);
                   return (
                     <CommandItem
                       key={option.value}
-                      value={`${option.label} ${option.sublabel || ""} ${option.value}`}
+                      value={option.value}
                       onSelect={() => toggleOption(option.value)}
                       className="cursor-pointer"
                     >
@@ -151,6 +178,24 @@ export function MultiSelectFilter({
                   );
                 })}
               </CommandGroup>
+              {coincidencias.length > MAX_VISIBLES ? (
+                <p className="px-3 py-2 text-center text-[11px] text-muted-foreground">
+                  Mostrando {MAX_VISIBLES} de {coincidencias.length.toLocaleString("es-CO")}: sigue escribiendo para afinar.
+                </p>
+              ) : null}
+              {coincidencias.length > 1 && busqueda.trim() ? (
+                <>
+                  <CommandSeparator />
+                  <CommandGroup>
+                    <CommandItem
+                      onSelect={() => onChange([...new Set([...selected, ...coincidencias.map((o) => o.value)])])}
+                      className="cursor-pointer justify-center text-center text-xs text-primary"
+                    >
+                      Seleccionar las {coincidencias.length.toLocaleString("es-CO")} coincidencias
+                    </CommandItem>
+                  </CommandGroup>
+                </>
+              ) : null}
               {selected.length > 0 && (
                 <>
                   <CommandSeparator />

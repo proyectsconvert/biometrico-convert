@@ -20,7 +20,7 @@ import { Card } from "@/components/ui/card";
 import { Textarea } from "@/components/ui/textarea";
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { cn } from "@/lib/utils";
-import { conceptosQueFaltan, conceptosReportados, diasPorRevisar } from "@/lib/conciliacion";
+import { conceptosConDiferenciaMenor, conceptosQueFaltan, conceptosReportados, diasPorRevisar } from "@/lib/conciliacion";
 
 type Concepto = { clave: string; etiqueta: string; reportado: number; biometrico: number };
 export type FilaConciliacion = {
@@ -93,33 +93,37 @@ function sugerir(x: FilaConciliacion, tol: number): Sugerencia {
   if (x.estado === "sin_biometria") {
     return { tipo: "esperar", titulo: "Faltan marcaciones del biométrico", detalle: `No hay marcaciones cargadas del ${fechaCorta(x.period_start)} al ${fechaCorta(x.period_end)}. Carga esos CSV en Importaciones antes de aprobar.` };
   }
-  // Solo los bloques reportados; los no reportados no se mencionan (no son horas por pagar)
+  // Solo los bloques reportados; los no reportados no se mencionan (no son horas por pagar).
+  // El resultado lo deciden las horas: biométrico igual o mayor cuadra; un poco menor (dentro de la
+  // tolerancia) se revisa; menor más allá de la tolerancia no cuadra.
   const faltan = conceptosQueFaltan(x, tol);
-  // Solo días donde se reporta más de lo marcado; marcar de más no se revisa
+  const menores = conceptosConDiferenciaMenor(x, tol);
   const dias = diasPorRevisar(x);
+  const nota = dias.length ? ` Nota: ${dias.join(", ")} (ver detalle por día).` : "";
+  const linea = (c: (typeof faltan)[number]) =>
+    `${nombreConcepto(c.etiqueta)}: reporta ${h(c.reportado)} h y el biométrico respalda ${h(c.biometrico)} h`;
   if (faltan.length) {
-    const lista = faltan.map((c) => `${nombreConcepto(c.etiqueta)}: reporta ${h(c.reportado)} h y el biométrico respalda ${h(c.biometrico)} h (faltan ${h(c.reportado - c.biometrico)} h)`);
+    const lista = faltan.map((c) => `${linea(c)} (faltan ${h(c.reportado - c.biometrico)} h)`);
     return {
       tipo: "observar",
       titulo: "No cuadra: sugerimos observar",
       detalle: lista.join(" · "),
-      comentario: `${lista.join(". ")}.${dias.length ? ` Además: ${dias.join(", ")}.` : ""} Por favor corregir o adjuntar soporte.`,
+      comentario: `${lista.join(". ")}. Por favor corregir o adjuntar soporte.`,
     };
   }
-  if (dias.length) {
+  if (menores.length) {
+    const lista = menores.map((c) => `${linea(c)} (${h(c.reportado - c.biometrico)} h menos, dentro de la tolerancia de ${h(tol)} h)`);
     return {
       tipo: "revisar",
-      titulo: "Las horas cuadran, pero hay días por revisar",
-      detalle: `${dias.join(" · ")}. Abre el detalle por día y decide si apruebas u observas.`,
-      comentario: `Las horas reportadas cuadran con el biométrico, pero hay ${dias.join(", ")}. Por favor revisar.`,
+      titulo: "Diferencia menor: revisa los días",
+      detalle: `${lista.join(" · ")}. Abre el detalle por día y decide si apruebas u observas.${nota}`,
+      comentario: `${lista.join(". ")}. Por favor revisar.`,
     };
   }
   return {
     tipo: "aprobar",
     titulo: "Cuadra: sugerimos aprobar",
-    detalle: x.marca_en_novedad
-      ? `El biométrico respalda todas las horas reportadas. Marcó ${x.marca_en_novedad} día(s) de más (en días de novedad): no afecta lo reportado.`
-      : "El biométrico respalda todas las horas reportadas.",
+    detalle: `El biométrico respalda igual o más de las horas reportadas.${nota}`,
   };
 }
 
@@ -301,7 +305,7 @@ export function ConciliacionNovedades({
           <p className="font-medium">¿Qué es la conciliación?</p>
           <p className="text-muted-foreground">
             Compara las <b>horas que reporta el supervisor</b> (nocturnas, dominicales/festivos y extras) con las que <b>respalda el biométrico</b>.
-            Solo se comparan los bloques de horas que se reportan. Si el biométrico respalda igual o más de lo reportado (con {h(tol)} h de tolerancia), cuadra y se sugiere aprobar; si se reporta más de lo marcado, se sugiere observar con el comentario ya escrito. Las horas que no se reportan no se muestran ni se mencionan en las observaciones.
+            Solo se comparan los bloques de horas que se reportan. Si el biométrico respalda igual o más de lo reportado, cuadra y se sugiere aprobar; si respalda un poco menos (hasta {h(tol)} h, la tolerancia), queda en «Revisar días»; si respalda menos de eso, se sugiere observar con el comentario ya escrito. Las horas que no se reportan no se muestran ni se mencionan en las observaciones.
           </p>
           {sinHoras > 0 ? (
             <p className="text-muted-foreground">
@@ -442,13 +446,14 @@ function TarjetaPersona({ x, sug, tol, abierta, alAbrir, puedeAprobar, trabajand
             {conceptos.map((c) => {
               const dif = c.reportado - c.biometrico;
               const falta = x.hay_biometria && dif > tol;
+              const menor = x.hay_biometria && dif > 0.01 && dif <= tol;
               return (
                 <tr key={c.clave} className="border-t">
                   <td className="py-1.5">{nombreConcepto(c.etiqueta)}</td>
                   <td className="py-1.5 text-right tabular-nums">{h(c.reportado)} h</td>
                   <td className="py-1.5 text-right tabular-nums">{x.hay_biometria ? `${h(c.biometrico)} h` : "—"}</td>
-                  <td className={cn("py-1.5 pl-4 text-xs", falta ? "font-medium text-destructive" : "text-muted-foreground")}>
-                    {!x.hay_biometria ? "sin datos" : falta ? `faltan ${h(dif)} h` : "✓ respaldado"}
+                  <td className={cn("py-1.5 pl-4 text-xs", falta ? "font-medium text-destructive" : menor ? "font-medium text-amber-700 dark:text-amber-400" : "text-muted-foreground")}>
+                    {!x.hay_biometria ? "sin datos" : falta ? `faltan ${h(dif)} h` : menor ? `${h(dif)} h menos (tolerancia)` : "✓ respaldado"}
                   </td>
                 </tr>
               );
@@ -497,7 +502,7 @@ function TarjetaPersona({ x, sug, tol, abierta, alAbrir, puedeAprobar, trabajand
 const TITULO_OPERACION: Record<Sugerencia["tipo"], string> = {
   aprobar: "Cuadra con el biométrico",
   observar: "No cuadra con el biométrico",
-  revisar: "Las horas cuadran, pero hay días por revisar",
+  revisar: "Diferencia menor con el biométrico (dentro de la tolerancia)",
   esperar: "Faltan marcaciones del biométrico",
   crear: "No se puede validar",
 };
@@ -511,6 +516,17 @@ export function CruceBiometrico({ fila, tol }: { fila: FilaConciliacion; tol: nu
   const sug = sugerir(fila, tol);
   const e = ESTILO[sug.tipo];
   const conceptos = conceptosReportados(fila);
+  if (!conceptos.length) {
+    return (
+      <div className="space-y-1 rounded-lg border p-3">
+        <p className="text-xs font-medium text-muted-foreground">Días reportados frente al biométrico</p>
+        <Button size="sm" variant="ghost" className="-ml-2" onClick={() => setDias((v) => !v)}>
+          {dias ? <ChevronDown className="size-4" /> : <ChevronRight className="size-4" />} Detalle por día (entrada, salida y horas del biométrico)
+        </Button>
+        {dias ? <div className="rounded-md border bg-muted/20"><DetalleDias fila={fila} /></div> : null}
+      </div>
+    );
+  }
   return (
     <div className="space-y-2 rounded-lg border p-3">
       <p className="text-xs font-medium text-muted-foreground">Cruce con el biométrico · lo mismo que revisa Nómina</p>
@@ -536,6 +552,7 @@ export function CruceBiometrico({ fila, tol }: { fila: FilaConciliacion; tol: nu
             {conceptos.map((c) => {
               const dif = c.reportado - c.biometrico;
               const falta = dif > tol;
+              const menor = dif > 0.01 && dif <= tol;
               return (
                 <tr key={c.clave} className="border-t">
                   <td className="py-1.5">{nombreConcepto(c.etiqueta)}</td>
@@ -544,8 +561,8 @@ export function CruceBiometrico({ fila, tol }: { fila: FilaConciliacion; tol: nu
                   <td className={cn("py-1.5 text-right tabular-nums", falta ? "font-medium text-destructive" : "text-muted-foreground")}>
                     {dif > 0 ? `+${h(dif)} h` : "—"}
                   </td>
-                  <td className={cn("py-1.5 pl-4 text-xs", falta ? "font-medium text-destructive" : "text-muted-foreground")}>
-                    {falta ? `${h(dif)} h sin respaldo` : "✓ respaldado"}
+                  <td className={cn("py-1.5 pl-4 text-xs", falta ? "font-medium text-destructive" : menor ? "font-medium text-amber-700 dark:text-amber-400" : "text-muted-foreground")}>
+                    {falta ? `${h(dif)} h sin respaldo` : menor ? `${h(dif)} h menos (dentro de la tolerancia)` : "✓ respaldado"}
                   </td>
                 </tr>
               );
@@ -561,6 +578,20 @@ export function CruceBiometrico({ fila, tol }: { fila: FilaConciliacion; tol: nu
           {dias ? <div className="rounded-md border bg-muted/20"><DetalleDias fila={fila} /></div> : null}
         </>
       ) : null}
+    </div>
+  );
+}
+
+/** Detalle por día de una persona sin totales de horas (solo reportó días). */
+export function DetalleDiasPersona({ document, desde, hasta }: { document: string; desde: string; hasta: string }) {
+  const [abierto, setAbierto] = useState(false);
+  const fila = { id: `dias-${document}-${desde}-${hasta}`, document, period_start: desde, period_end: hasta, hay_biometria: true } as FilaConciliacion;
+  return (
+    <div className="space-y-1 rounded-lg border bg-card p-3">
+      <Button size="sm" variant="ghost" className="-ml-2" onClick={() => setAbierto((v) => !v)}>
+        {abierto ? <ChevronDown className="size-4" /> : <ChevronRight className="size-4" />} Detalle por día frente al biométrico ({fechaCorta(desde)} al {fechaCorta(hasta)})
+      </Button>
+      {abierto ? <div className="rounded-md border bg-muted/20"><DetalleDias fila={fila} /></div> : null}
     </div>
   );
 }

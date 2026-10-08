@@ -57,6 +57,7 @@ import { Tooltip as Ayudita, TooltipContent, TooltipTrigger } from "@/components
 import { Paginador, usePaginado } from "@/components/simple-table";
 import { MultiSelectFilter } from "@/components/multi-select-filter";
 import { useFiltroCampanaPersonas } from "@/lib/filtro-personas";
+import { FILTRO_PERSONAL_INICIAL, FiltrosPersonal, type FiltroPersonal } from "@/components/filtros-personal";
 import { cn } from "@/lib/utils";
 
 export const Route = createFileRoute("/_authenticated/panel")({
@@ -168,6 +169,7 @@ function Panel() {
   const [desde, setDesde] = useState(iso(new Date(Date.now() - 29 * 864e5)));
   const [campanasSel, setCampanasSel] = useState<string[]>([]);
   const [personasSel, setPersonasSel] = useState<string[]>([]);
+  const [fp, setFp] = useState<FiltroPersonal>(FILTRO_PERSONAL_INICIAL);
   const [busqueda, setBusqueda] = useState("");
   const [anclado, setAnclado] = useState(false);
   const [pestana, setPestana] = useState("resumen");
@@ -181,13 +183,14 @@ function Panel() {
   });
   const todasCampanas = useMemo(() => (campanas.data ?? []).map((c) => ({ value: c.id, label: c.name })), [campanas.data]);
   // Campañas y personas coherentes entre sí y en orden alfabético
-  const { opcionesCampanas, opcionesPersonas, placeholderCampanas, placeholderPersonas } = useFiltroCampanaPersonas({
+  const { opcionesCampanas, opcionesPersonas, placeholderCampanas, placeholderPersonas, opcionesCargos, opcionesJefes, personasConsulta } = useFiltroCampanaPersonas({
     opcionesCampanas: todasCampanas, campanas: campanasSel, personas: personasSel, alCambiarPersonas: setPersonasSel, valor: "id",
+    cargos: fp.cargos, jefes: fp.jefes, incluirInactivos: fp.incluirInactivos, desde,
   });
 
   const filtros = {
     _campaigns: campanasSel.length ? campanasSel : null,
-    _employees: personasSel.length ? personasSel : null,
+    _employees: personasConsulta.length ? personasConsulta : null,
     _search: busqueda.trim() || null,
   };
   const cargarBI = async (d: string, h: string) => {
@@ -197,7 +200,7 @@ function Panel() {
   };
 
   const bi = useQuery({
-    queryKey: ["panel-bi", desde, hasta, campanasSel, personasSel, busqueda],
+    queryKey: ["panel-bi", desde, hasta, campanasSel, personasConsulta, busqueda],
     placeholderData: keepPreviousData,
     queryFn: () => cargarBI(desde, hasta),
   });
@@ -207,13 +210,13 @@ function Panel() {
   const antHasta = sumarDias(desde, -1);
   const antDesde = sumarDias(antHasta, -(duracion - 1));
   const anterior = useQuery({
-    queryKey: ["panel-bi", antDesde, antHasta, campanasSel, personasSel, busqueda],
+    queryKey: ["panel-bi", antDesde, antHasta, campanasSel, personasConsulta, busqueda],
     enabled: pestana === "estrategico",
     placeholderData: keepPreviousData,
     queryFn: () => cargarBI(antDesde, antHasta),
   });
   const tendencia = useQuery({
-    queryKey: ["panel-tendencia", hasta, campanasSel, personasSel, busqueda],
+    queryKey: ["panel-tendencia", hasta, campanasSel, personasConsulta, busqueda],
     enabled: pestana === "estrategico",
     placeholderData: keepPreviousData,
     queryFn: async () => {
@@ -247,9 +250,10 @@ function Panel() {
   const limpiarFiltros = () => {
     setCampanasSel([]);
     setPersonasSel([]);
+    setFp(FILTRO_PERSONAL_INICIAL);
     setBusqueda("");
   };
-  const hayFiltros = campanasSel.length > 0 || personasSel.length > 0 || Boolean(busqueda.trim());
+  const hayFiltros = campanasSel.length > 0 || personasSel.length > 0 || fp.cargos.length > 0 || fp.jefes.length > 0 || Boolean(busqueda.trim());
   const cargando = bi.isLoading;
   const k = d?.kpis;
 
@@ -289,6 +293,15 @@ function Panel() {
             title="Personas" placeholder={placeholderPersonas} searchPlaceholder="Buscar por cédula o nombre…"
             options={opcionesPersonas} selected={personasSel} onChange={setPersonasSel} popoverWidth="w-[340px]"
             triggerClassName="h-8 min-w-[180px] border-sidebar-border bg-sidebar-accent/40 text-xs text-sidebar-foreground hover:bg-sidebar-accent hover:text-sidebar-accent-foreground"
+          />
+          <FiltrosPersonal
+            compacto
+            valor={fp}
+            onChange={setFp}
+            opcionesCargos={opcionesCargos}
+            opcionesJefes={opcionesJefes}
+            triggerClassName="h-8 min-w-[160px] border-sidebar-border bg-sidebar-accent/40 text-xs text-sidebar-foreground hover:bg-sidebar-accent hover:text-sidebar-accent-foreground"
+            claseInactivos="flex cursor-pointer items-center gap-2 text-xs text-sidebar-foreground/80"
           />
           <div className="relative min-w-52 flex-1">
             <Search className="pointer-events-none absolute left-2.5 top-1/2 size-3.5 -translate-y-1/2 text-sidebar-foreground/50" />

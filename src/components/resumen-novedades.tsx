@@ -9,7 +9,7 @@ import { supabase } from "@/integrations/supabase/client";
 import { CONCEPTOS, colorTipo, type CampoConcepto } from "@/lib/novedades";
 import { ChipArchivo, VisorDocumento, subirEvidencias, type Archivo } from "@/components/visor-documento";
 import { Paginador, usePaginado } from "@/components/simple-table";
-import { CruceBiometrico, type FilaConciliacion } from "@/components/conciliacion-novedades";
+import { CruceBiometrico, DetalleDiasPersona, type FilaConciliacion } from "@/components/conciliacion-novedades";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
@@ -57,7 +57,7 @@ function horasDe(t: TotalResumen) {
     .filter((x) => x.horas || x.ajuste);
 }
 
-type Persona = { document: string; nombre: string; campana: string | null; dias: Map<string, number>; totales: TotalResumen[] };
+type Persona = { document: string; nombre: string; campana: string | null; dias: Map<string, number>; totales: TotalResumen[]; desde: string | null; hasta: string | null };
 type Accion = { modo: "observado" | "rechazado" | "responder" | "comentar"; total: TotalResumen; nombre: string };
 
 export function ResumenNovedades({ totales, entradas, cargando, puedeAprobar, puedeResponder, tenantId, onCambio }: {
@@ -74,12 +74,14 @@ export function ResumenNovedades({ totales, entradas, cargando, puedeAprobar, pu
     const m = new Map<string, Persona>();
     const obtener = (doc: string, nombre: string | null, campana: string | null) => {
       let p = m.get(doc);
-      if (!p) { p = { document: doc, nombre: nombre ?? doc, campana, dias: new Map(), totales: [] }; m.set(doc, p); }
+      if (!p) { p = { document: doc, nombre: nombre ?? doc, campana, dias: new Map(), totales: [], desde: null, hasta: null }; m.set(doc, p); }
       return p;
     };
     for (const e of entradas) {
       const p = obtener(e.document, e.full_name, e.campaign_label);
       p.dias.set(e.novelty_type, (p.dias.get(e.novelty_type) ?? 0) + 1);
+      if (!p.desde || e.work_date < p.desde) p.desde = e.work_date;
+      if (!p.hasta || e.work_date > p.hasta) p.hasta = e.work_date;
     }
     for (const t of totales) obtener(t.document, t.full_name, t.campaign_label).totales.push(t);
     return [...m.values()].sort((a, b) => a.nombre.localeCompare(b.nombre, "es"));
@@ -236,7 +238,10 @@ export function ResumenNovedades({ totales, entradas, cargando, puedeAprobar, pu
                 {abiertaP ? (
                   <div className="space-y-3 border-t bg-muted/20 p-4">
                     {!p.totales.length ? (
-                      <p className="text-sm text-muted-foreground">Esta persona solo tiene días reportados (asistencia, descanso, faltas…): no hay horas que revisar.</p>
+                      <>
+                        <p className="text-sm text-muted-foreground">Esta persona solo tiene días reportados (asistencia, descanso, faltas…): no hay horas que revisar.</p>
+                        {p.desde && p.hasta ? <DetalleDiasPersona document={p.document} desde={p.desde} hasta={p.hasta} /> : null}
+                      </>
                     ) : null}
                     {p.totales.map((t) => (
                       <div key={t.id} className="space-y-3 rounded-lg border bg-card p-3">
@@ -262,13 +267,13 @@ export function ResumenNovedades({ totales, entradas, cargando, puedeAprobar, pu
                             </tbody>
                           </table>
                         ) : <p className="text-xs text-muted-foreground">Sin horas reportadas en este periodo.</p>}
-                        {horasDe(t).length ? (
+                        {(
                           cruce.data?.get(t.id) ? (
                             <CruceBiometrico fila={cruce.data.get(t.id)!} tol={tolerancia.data ?? 0.5} />
                           ) : cruce.isLoading ? (
                             <p className="text-xs text-muted-foreground"><Loader2 className="mr-1 inline size-3.5 animate-spin" />Cruzando con el biométrico…</p>
                           ) : null
-                        ) : null}
+                        )}
                         {t.observaciones ? <p className="text-xs"><b>Observaciones de la plantilla:</b> {t.observaciones}</p> : null}
 
                         <Historial eventos={eventosDe(t.id)} cargando={eventos.isLoading} onAbrir={setArchivo} />

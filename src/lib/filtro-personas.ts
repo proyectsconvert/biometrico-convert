@@ -9,7 +9,16 @@ export type EmpleadoFiltro = {
   position: string | null;
   campaign_id: string | null;
   campana: string | null;
+  status: string;
+  termination_date: string | null;
+  jefe_id: string | null;
 };
+
+/** Cargo agrupable: sin «(PERIODO DE PRUEBA)» ni espacios de más. */
+export const cargoBase = (cargo: string | null | undefined) =>
+  (cargo ?? "").replace(/\(.*?\)/g, "").replace(/\s+/g, " ").trim().toUpperCase() || "SIN CARGO";
+/** Cargos que suelen tener personas a cargo (para la lista de supervisores). */
+const CARGO_CON_EQUIPO = /SUPERVIS|COORDINAD|JEFE|LIDER|LÍDER|MANAGER|GERENTE|DIRECTOR/i;
 type Opcion = { value: string; label: string; sublabel?: string };
 
 /** Orden alfabético en español (tildes y ñ en su lugar, sin distinguir mayúsculas). */
@@ -25,12 +34,22 @@ export function useEmpleadosFiltro() {
       for (let i = 0; i < 30; i++) {
         const { data, error } = await supabase
           .from("employees")
-          .select("id, document, full_name, position, campaign_id, campaigns(name)")
+          .select("id, document, full_name, position, campaign_id, status, termination_date, jefe_id, campaigns(name)")
           .order("full_name")
           .range(i * 1000, i * 1000 + 999);
         if (error) throw error;
         for (const e of (data ?? []) as unknown as (Omit<EmpleadoFiltro, "campana"> & { campaigns: { name: string } | null })[]) {
-          out.push({ id: e.id, document: e.document, full_name: e.full_name, position: e.position, campaign_id: e.campaign_id, campana: e.campaigns?.name ?? null });
+          out.push({
+            id: e.id,
+            document: e.document,
+            full_name: e.full_name,
+            position: e.position,
+            campaign_id: e.campaign_id,
+            campana: e.campaigns?.name ?? null,
+            status: e.status,
+            termination_date: e.termination_date,
+            jefe_id: e.jefe_id,
+          });
         }
         if (!data || data.length < 1000) break;
       }
@@ -47,6 +66,11 @@ export function useEmpleadosFiltro() {
  *   elegidas, para poder quitarlas).
  * Ambas listas van en orden alfabético. `campanasPor` indica si el filtro de campañas usa ids o
  * nombres; `valor`, qué dato identifica a la persona (id o documento).
+ *
+ * Además: cargo, supervisor (jefe inmediato) y personal activo. Por defecto solo se listan las
+ * personas activas (y las retiradas desde `desde`, para no perder a nadie en un corte de nómina);
+ * `incluirInactivos` muestra a todos. Cargo y supervisor también filtran los datos: `personasConsulta`
+ * es la lista de personas que la pantalla debe pasar a su consulta.
  */
 export function useFiltroCampanaPersonas({
   opcionesCampanas,
@@ -55,6 +79,10 @@ export function useFiltroCampanaPersonas({
   personas,
   alCambiarPersonas,
   valor = "document",
+  cargos = [],
+  jefes = [],
+  incluirInactivos = false,
+  desde,
 }: {
   opcionesCampanas: Opcion[];
   campanas: string[];
@@ -62,17 +90,52 @@ export function useFiltroCampanaPersonas({
   personas: string[];
   alCambiarPersonas: (personas: string[]) => void;
   valor?: "id" | "document";
+  cargos?: string[];
+  jefes?: string[];
+  incluirInactivos?: boolean;
+  desde?: string;
 }) {
   const empleados = useEmpleadosFiltro();
   const campanaDe = (e: EmpleadoFiltro) => (campanasPor === "id" ? e.campaign_id : e.campana) ?? "";
+  const vigente = (e: EmpleadoFiltro) =>
+    incluirInactivos || e.status === "activo" || Boolean(desde && e.termination_date && e.termination_date >= desde);
+
+  // Base: campaña y personal activo (sobre ella se calculan las opciones de cargo y supervisor)
+  const base = useMemo(() => {
+    const set = new Set(campanas);
+    return (empleados.data ?? []).filter((e) => vigente(e) && (!campanas.length || set.has(campanaDe(e))));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [empleados.data, campanas, campanasPor, incluirInactivos, desde]);
 
   const visibles = useMemo(() => {
+    const setCargos = new Set(cargos);
+    const setJefes = new Set(jefes);
+    return base.filter(
+      (e) => (!cargos.length || setCargos.has(cargoBase(e.position))) && (!jefes.length || (e.jefe_id != null && setJefes.has(e.jefe_id))),
+    );
+  }, [base, cargos, jefes]);
+
+  const opcionesCargos = useMemo(() => {
+    const cuenta = new Map<string, number>();
+    for (const e of base) cuenta.set(cargoBase(e.position), (cuenta.get(cargoBase(e.position)) ?? 0) + 1);
+    return [...cuenta.entries()]
+      .sort((a, b) => alfabetico(a[0], b[0]))
+      .map(([c, n]) => ({ value: c, label: c, sublabel: `${n} persona${n === 1 ? "" : "s"}` }));
+  }, [base]);
+
+  // Supervisores: quien ya tiene personas a cargo o tiene un cargo de supervisión (activos)
+  const opcionesJefes = useMemo(() => {
     const lista = empleados.data ?? [];
-    if (!campanas.length) return lista;
-    const set = new Set(campanas);
-    return lista.filter((e) => set.has(campanaDe(e)));
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [empleados.data, campanas, campanasPor]);
+    const aCargo = new Map<string, number>();
+    for (const e of base) if (e.jefe_id) aCargo.set(e.jefe_id, (aCargo.get(e.jefe_id) ?? 0) + 1);
+    return lista
+      .filter((e) => aCargo.has(e.id) || (e.status === "activo" && CARGO_CON_EQUIPO.test(e.position ?? "")))
+      .map((e) => ({
+        value: e.id,
+        label: e.full_name,
+        sublabel: [cargoBase(e.position), e.campana, `${aCargo.get(e.id) ?? 0} a cargo`].filter(Boolean).join(" · "),
+      }));
+  }, [empleados.data, base]);
 
   const opcionesPersonas = useMemo(
     () => visibles.map((e) => ({
@@ -102,9 +165,22 @@ export function useFiltroCampanaPersonas({
     if (quedan.length !== personas.length) alCambiarPersonas(quedan);
   }, [visibles, personas, valor, empleados.data, alCambiarPersonas]);
 
+  const filtraDatos = Boolean(cargos.length || jefes.length);
+  const personasConsulta = useMemo(() => {
+    if (personas.length) return personas;
+    if (!filtraDatos) return [];
+    const v = visibles.map((e) => e[valor]);
+    // Ninguna persona cumple: un valor imposible para que la consulta no traiga a todos
+    return v.length ? v : ["__ninguna__"];
+  }, [personas, filtraDatos, visibles, valor]);
+
   return {
-    /** Cédulas de las personas de las campañas elegidas (null = sin filtro de campaña). */
-    documentosCampanas: campanas.length ? visibles.map((e) => e.document) : null,
+    /** Cédulas de las personas de las campañas, cargos o supervisores elegidos (null = sin esos filtros). */
+    documentosCampanas: campanas.length || filtraDatos ? visibles.map((e) => e.document) : null,
+    /** Personas para la consulta de datos: las elegidas o, con cargo/supervisor, las que cumplen. */
+    personasConsulta,
+    opcionesCargos,
+    opcionesJefes,
     opcionesCampanas: campanasFiltradas,
     opcionesPersonas,
     placeholderPersonas: campanas.length ? "Todas las de la campaña" : "Todas las personas",

@@ -36,6 +36,8 @@ export type Campo = {
   required?: boolean;
   options?: { value: string; label: string }[];
   fuente?: { tabla: string; valor?: string; etiqueta?: string };
+  /** En listas con opciones fijas, permite dejar el dato vacío («— Sin asignar —»). */
+  vacio?: boolean;
   readOnlyOnEdit?: boolean;
   placeholder?: string;
   ayuda?: string;
@@ -565,7 +567,7 @@ function CampoForm({
           </SelectTrigger>
           <SelectContent>
             {/* Las listas de otras tablas permiten dejar el dato vacío */}
-            {campo.fuente && !campo.required ? (
+            {(campo.fuente || campo.vacio) && !campo.required ? (
               <SelectItem value={SIN_VALOR} className="text-muted-foreground">
                 — Sin asignar —
               </SelectItem>
