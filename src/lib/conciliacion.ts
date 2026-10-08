@@ -11,8 +11,19 @@ export type ConceptoConciliacion = {
   clave: string;
   etiqueta: string;
   reportado: number;
+  /** Lo que respalda el biométrico (en nocturnas y extras diurnas incluye la bolsa de extras nocturnas). */
   biometrico: number;
+  /** Horas de extras nocturnas no reportadas que respaldan este concepto. */
+  de_extra_nocturna?: number;
+  /** En extras nocturnas: cuántas se usaron para respaldar nocturnas o extras diurnas. */
+  usado_en_otros?: number;
 };
+
+/** «(incluye 0,73 h de extra nocturna)» cuando el concepto se respalda con la bolsa de extras nocturnas. */
+export const notaBolsa = (c: ConceptoConciliacion) =>
+  Number(c.de_extra_nocturna) > 0.009
+    ? `incluye ${Number(c.de_extra_nocturna).toLocaleString("es-CO", { maximumFractionDigits: 2 })} h de extra nocturna`
+    : null;
 
 type Cruce = {
   estado: string;

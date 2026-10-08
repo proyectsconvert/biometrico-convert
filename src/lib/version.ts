@@ -30,6 +30,8 @@ export const HISTORIAL: EntradaVersion[] = [
       "Las personas sin horas, bonificaciones ni comisiones reportadas quedan aprobadas automáticamente; el resumen muestra su detalle por día.",
       "Filtros por cargo y por supervisor (el usuario Supervisor o Coordinador de la campaña) en Panel, Control diario, Marcaciones, Novedades, Turnos y Empleados; solo personal activo por defecto, con opción de incluir inactivos.",
       "Los buscadores de personas filtran mientras se escribe (sin tildes y por palabras).",
+      "Las extras nocturnas no reportadas respaldan las nocturnas y extras diurnas reportadas que falten, sin contar dos veces la misma hora; el detalle por día separa nocturnas, extra diurna y extra nocturna.",
+      "El motor aplica el máximo de horas por jornada, los festivos como día de descanso y el dominical/festivo por las horas que caen ese día.",
       "Versión visible en el menú con su historial de cambios.",
     ],
   },
