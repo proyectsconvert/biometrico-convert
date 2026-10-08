@@ -2,7 +2,7 @@ import { createFileRoute } from "@tanstack/react-router";
 import { useEffect, useMemo, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useServerFn } from "@tanstack/react-start";
-import { Eye, EyeOff, KeyRound, Loader2, Settings2, ShieldPlus, Trash2, UserCog, Wand2 } from "lucide-react";
+import { Eye, EyeOff, KeyRound, Loader2, Pencil, Settings2, ShieldPlus, Trash2, UserCog, Wand2 } from "lucide-react";
 import { toast } from "sonner";
 import { supabase } from "@/integrations/supabase/client";
 import { useAccess } from "@/lib/session";
@@ -506,6 +506,7 @@ function RolesUsuario({
   const [rolId, setRolId] = useState("");
   const [scope, setScope] = useState<Alcance>("mi_empresa");
   const [campSel, setCampSel] = useState<string[]>([]);
+  const [editando, setEditando] = useState<string | null>(null);
   const requiereCampanas = scope === "mi_campana" || scope === "campanas_asignadas";
   const esAsesor = roles.find((r) => r.id === rolId)?.code === "asesor";
   useEffect(() => {
@@ -554,7 +555,8 @@ function RolesUsuario({
         <p className="text-sm font-medium">Roles actuales</p>
         {asignaciones.length ? (
           asignaciones.map((a) => (
-            <div key={a.id} className="flex items-start justify-between gap-2 rounded-lg border p-3">
+            <div key={a.id} className="rounded-lg border p-3">
+            <div className="flex items-start justify-between gap-2">
               <div>
                 <p className="text-sm font-medium">{a.roles?.name}</p>
                 <p className="text-xs text-muted-foreground">
@@ -562,6 +564,17 @@ function RolesUsuario({
                   {a.campaign_ids?.length ? ` · ${a.campaign_ids.map(nombreCampana).join(", ")}` : ""}
                 </p>
               </div>
+              <div className="flex shrink-0">
+              {!["admin", "nomina", "super_admin"].includes(a.roles?.code ?? "") ? (
+                <Button
+                  variant="ghost"
+                  size="icon"
+                  title="Editar alcance y campañas"
+                  onClick={() => setEditando((e) => (e === a.id ? null : a.id))}
+                >
+                  <Pencil className="size-4" />
+                </Button>
+              ) : null}
               <Button
                 variant="ghost"
                 size="icon"
@@ -571,6 +584,17 @@ function RolesUsuario({
               >
                 <Trash2 className="size-4 text-destructive" />
               </Button>
+              </div>
+            </div>
+            {editando === a.id ? (
+              <EditarCampanasRol
+                asignacion={a}
+                campanas={campanas.data ?? []}
+                puedePlataforma={acceso.isSuperAdmin}
+                nombreUsuario={perfil.full_name ?? ""}
+                onListo={() => { setEditando(null); onCambio(); }}
+              />
+            ) : null}
             </div>
           ))
         ) : (
@@ -623,6 +647,98 @@ function RolesUsuario({
         ) : null}
         <Button className="w-full" disabled={asignar.isPending || !rolId} onClick={() => asignar.mutate()}>
           <ShieldPlus className="size-4" /> Asignar rol
+        </Button>
+      </div>
+    </div>
+  );
+}
+
+/** Cambia el alcance y las campañas de un rol ya asignado, sin quitarlo y volverlo a asignar. */
+function EditarCampanasRol({
+  asignacion,
+  campanas,
+  puedePlataforma,
+  nombreUsuario,
+  onListo,
+}: {
+  asignacion: AsignacionRol;
+  campanas: { id: string; name: string }[];
+  puedePlataforma: boolean;
+  nombreUsuario: string;
+  onListo: () => void;
+}) {
+  const acceso = useAccess();
+  const esAsesor = asignacion.roles?.code === "asesor";
+  const [scope, setScope] = useState<Alcance>(asignacion.scope as Alcance);
+  const [sel, setSel] = useState<string[]>(asignacion.campaign_ids ?? []);
+  const [filtro, setFiltro] = useState("");
+  const requiere = scope === "mi_campana" || scope === "campanas_asignadas";
+  const visibles = campanas.filter((c) => c.name.toLowerCase().includes(filtro.trim().toLowerCase()));
+
+  const guardar = useMutation({
+    mutationFn: async () => {
+      if (requiere && !sel.length) throw new Error("Selecciona al menos una campaña.");
+      const campaign_ids = requiere ? (esAsesor ? sel.slice(0, 1) : sel) : [];
+      const { error } = await supabase.from("user_roles").update({ scope, campaign_ids }).eq("id", asignacion.id);
+      if (error) throw error;
+      // Trazabilidad: antes y después
+      await supabase.from("audit_logs").insert({
+        tenant_id: acceso.tenantId,
+        user_id: acceso.userId,
+        module: "usuarios",
+        action: "editar_campanas",
+        record_id: asignacion.user_id,
+        old_value: { rol: asignacion.roles?.name ?? null, alcance: asignacion.scope, campanas: asignacion.campaign_ids ?? [] },
+        new_value: { rol: asignacion.roles?.name ?? null, alcance: scope, campanas: campaign_ids },
+        reason: `Campañas de ${nombreUsuario}`,
+      });
+    },
+    onSuccess: () => {
+      toast.success("Campañas actualizadas", { description: "La persona las verá al volver a cargar la página." });
+      onListo();
+    },
+    onError: (e: Error) => toast.error("No se pudieron guardar las campañas", { description: e.message }),
+  });
+
+  return (
+    <div className="mt-3 space-y-2 border-t pt-3">
+      <Select value={scope} onValueChange={(v) => setScope(v as Alcance)}>
+        <SelectTrigger><SelectValue /></SelectTrigger>
+        <SelectContent>
+          {ALCANCES.filter((x) => x.value !== "plataforma" || puedePlataforma).map((x) => <SelectItem key={x.value} value={x.value}>{x.label}</SelectItem>)}
+        </SelectContent>
+      </Select>
+      {requiere ? (
+        <>
+          <div className="flex items-center justify-between gap-2 text-xs text-muted-foreground">
+            <span>{esAsesor ? "Un asesor tiene una sola campaña (informativa)." : `${sel.length} de ${campanas.length} campañas`}</span>
+            {!esAsesor ? (
+              <span className="flex gap-2">
+                <button type="button" className="text-primary hover:underline" onClick={() => setSel([...new Set([...sel, ...visibles.map((c) => c.id)])])}>Todas</button>
+                <button type="button" className="text-primary hover:underline" onClick={() => setSel([])}>Ninguna</button>
+              </span>
+            ) : null}
+          </div>
+          {campanas.length > 8 ? <Input value={filtro} onChange={(e) => setFiltro(e.target.value)} placeholder="Buscar campaña" className="h-8" /> : null}
+          <div className="max-h-44 space-y-1 overflow-auto rounded-md border bg-background p-2">
+            {visibles.map((c) => (
+              <label key={c.id} className="flex items-center gap-2 text-sm">
+                <input
+                  type={esAsesor ? "radio" : "checkbox"}
+                  name={`campanas-${asignacion.id}`}
+                  checked={sel.includes(c.id)}
+                  onChange={(e) => setSel((p) => (esAsesor ? [c.id] : e.target.checked ? [...p, c.id] : p.filter((x) => x !== c.id)))}
+                />
+                {c.name}
+              </label>
+            ))}
+          </div>
+        </>
+      ) : null}
+      <div className="flex justify-end gap-2">
+        <Button size="sm" variant="outline" onClick={onListo} disabled={guardar.isPending}>Cancelar</Button>
+        <Button size="sm" onClick={() => guardar.mutate()} disabled={guardar.isPending}>
+          {guardar.isPending ? <Loader2 className="size-4 animate-spin" /> : null} Guardar campañas
         </Button>
       </div>
     </div>

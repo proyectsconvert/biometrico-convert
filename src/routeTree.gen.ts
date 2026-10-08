@@ -28,6 +28,7 @@ import { Route as AuthenticatedMarcacionesRouteImport } from './routes/_authenti
 import { Route as AuthenticatedNotificacionesRouteImport } from './routes/_authenticated/notificaciones'
 import { Route as AuthenticatedNovedadesRouteImport } from './routes/_authenticated/novedades'
 import { Route as AuthenticatedPanelRouteImport } from './routes/_authenticated/panel'
+import { Route as AuthenticatedRegistroTurnosRouteImport } from './routes/_authenticated/registro-turnos'
 import { Route as AuthenticatedReglasRouteImport } from './routes/_authenticated/reglas'
 import { Route as AuthenticatedReportesRouteImport } from './routes/_authenticated/reportes'
 import { Route as AuthenticatedResultadosRouteImport } from './routes/_authenticated/resultados'
@@ -135,6 +136,12 @@ const AuthenticatedPanelRoute = AuthenticatedPanelRouteImport.update({
   path: '/panel',
   getParentRoute: () => AuthenticatedRouteRoute,
 } as any)
+const AuthenticatedRegistroTurnosRoute =
+  AuthenticatedRegistroTurnosRouteImport.update({
+    id: '/registro-turnos',
+    path: '/registro-turnos',
+    getParentRoute: () => AuthenticatedRouteRoute,
+  } as any)
 const AuthenticatedReglasRoute = AuthenticatedReglasRouteImport.update({
   id: '/reglas',
   path: '/reglas',
@@ -185,6 +192,7 @@ export interface FileRoutesByFullPath {
   '/notificaciones': typeof AuthenticatedNotificacionesRoute
   '/novedades': typeof AuthenticatedNovedadesRoute
   '/panel': typeof AuthenticatedPanelRoute
+  '/registro-turnos': typeof AuthenticatedRegistroTurnosRoute
   '/reglas': typeof AuthenticatedReglasRoute
   '/reportes': typeof AuthenticatedReportesRoute
   '/resultados': typeof AuthenticatedResultadosRoute
@@ -211,6 +219,7 @@ export interface FileRoutesByTo {
   '/notificaciones': typeof AuthenticatedNotificacionesRoute
   '/novedades': typeof AuthenticatedNovedadesRoute
   '/panel': typeof AuthenticatedPanelRoute
+  '/registro-turnos': typeof AuthenticatedRegistroTurnosRoute
   '/reglas': typeof AuthenticatedReglasRoute
   '/reportes': typeof AuthenticatedReportesRoute
   '/resultados': typeof AuthenticatedResultadosRoute
@@ -239,6 +248,7 @@ export interface FileRoutesById {
   '/_authenticated/notificaciones': typeof AuthenticatedNotificacionesRoute
   '/_authenticated/novedades': typeof AuthenticatedNovedadesRoute
   '/_authenticated/panel': typeof AuthenticatedPanelRoute
+  '/_authenticated/registro-turnos': typeof AuthenticatedRegistroTurnosRoute
   '/_authenticated/reglas': typeof AuthenticatedReglasRoute
   '/_authenticated/reportes': typeof AuthenticatedReportesRoute
   '/_authenticated/resultados': typeof AuthenticatedResultadosRoute
@@ -267,6 +277,7 @@ export interface FileRouteTypes {
     | '/notificaciones'
     | '/novedades'
     | '/panel'
+    | '/registro-turnos'
     | '/reglas'
     | '/reportes'
     | '/resultados'
@@ -293,6 +304,7 @@ export interface FileRouteTypes {
     | '/notificaciones'
     | '/novedades'
     | '/panel'
+    | '/registro-turnos'
     | '/reglas'
     | '/reportes'
     | '/resultados'
@@ -320,6 +332,7 @@ export interface FileRouteTypes {
     | '/_authenticated/notificaciones'
     | '/_authenticated/novedades'
     | '/_authenticated/panel'
+    | '/_authenticated/registro-turnos'
     | '/_authenticated/reglas'
     | '/_authenticated/reportes'
     | '/_authenticated/resultados'
@@ -469,6 +482,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof AuthenticatedPanelRouteImport
       parentRoute: typeof AuthenticatedRouteRoute
     }
+    '/_authenticated/registro-turnos': {
+      id: '/_authenticated/registro-turnos'
+      path: '/registro-turnos'
+      fullPath: '/registro-turnos'
+      preLoaderRoute: typeof AuthenticatedRegistroTurnosRouteImport
+      parentRoute: typeof AuthenticatedRouteRoute
+    }
     '/_authenticated/reglas': {
       id: '/_authenticated/reglas'
       path: '/reglas'
@@ -531,6 +551,7 @@ interface AuthenticatedRouteRouteChildren {
   AuthenticatedNotificacionesRoute: typeof AuthenticatedNotificacionesRoute
   AuthenticatedNovedadesRoute: typeof AuthenticatedNovedadesRoute
   AuthenticatedPanelRoute: typeof AuthenticatedPanelRoute
+  AuthenticatedRegistroTurnosRoute: typeof AuthenticatedRegistroTurnosRoute
   AuthenticatedReglasRoute: typeof AuthenticatedReglasRoute
   AuthenticatedReportesRoute: typeof AuthenticatedReportesRoute
   AuthenticatedResultadosRoute: typeof AuthenticatedResultadosRoute
@@ -556,6 +577,7 @@ const AuthenticatedRouteRouteChildren: AuthenticatedRouteRouteChildren = {
   AuthenticatedNotificacionesRoute: AuthenticatedNotificacionesRoute,
   AuthenticatedNovedadesRoute: AuthenticatedNovedadesRoute,
   AuthenticatedPanelRoute: AuthenticatedPanelRoute,
+  AuthenticatedRegistroTurnosRoute: AuthenticatedRegistroTurnosRoute,
   AuthenticatedReglasRoute: AuthenticatedReglasRoute,
   AuthenticatedReportesRoute: AuthenticatedReportesRoute,
   AuthenticatedResultadosRoute: AuthenticatedResultadosRoute,

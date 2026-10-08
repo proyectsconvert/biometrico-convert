@@ -29,7 +29,7 @@ type Permiso = { id: string; module: string; action: string };
 const GRUPOS: { titulo: string; modulos: [string, string][] }[] = [
   { titulo: "Inicio", modulos: [["dashboard", "Panel"], ["reportes", "Reportes"]] },
   { titulo: "Personal", modulos: [["empleados", "Empleados"], ["empleadores", "Empleadores"], ["campanas", "Campañas"], ["centros_costo", "Centros de costo"]] },
-  { titulo: "Asistencia", modulos: [["importaciones", "Importaciones"], ["asistencia", "Control diario"], ["marcaciones", "Marcaciones"], ["turnos", "Turnos"]] },
+  { titulo: "Asistencia", modulos: [["importaciones", "Importaciones"], ["asistencia", "Control diario"], ["marcaciones", "Marcaciones"], ["turnos", "Turnos"], ["registro_turnos", "Registro de turnos"]] },
   { titulo: "Novedades", modulos: [["novedades", "Novedades y conciliación"]] },
   {
     titulo: "Administración",

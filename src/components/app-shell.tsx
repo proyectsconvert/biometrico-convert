@@ -26,6 +26,7 @@ import {
   Factory,
   FileBarChart,
   DatabaseZap,
+  Timer,
 } from "lucide-react";
 import { Sheet, SheetContent, SheetTitle } from "@/components/ui/sheet";
 import { Tooltip, TooltipContent, TooltipTrigger, TooltipProvider } from "@/components/ui/tooltip";
@@ -33,6 +34,8 @@ import { useAccess, useSignOut } from "@/lib/session";
 import { Button } from "@/components/ui/button";
 import { MiContrasena } from "@/components/mi-contrasena";
 import { CampanaNotificaciones } from "@/components/notificaciones";
+import { RegistroTurno } from "@/components/registro-turno";
+import { VersionApp } from "@/components/version-app";
 import { cn } from "@/lib/utils";
 
 type Item = {
@@ -67,6 +70,7 @@ const GRUPOS: { titulo: string; items: Item[] }[] = [
       { to: "/asistencia", label: "Control diario", icon: CalendarCheck, module: "asistencia" },
       { to: "/marcaciones", label: "Marcaciones", icon: Fingerprint, module: "marcaciones" },
       { to: "/turnos", label: "Turnos", icon: Clock, module: "turnos" },
+      { to: "/registro-turnos", label: "Registro de turnos", icon: Timer, module: "registro_turnos" },
     ],
   },
   {
@@ -221,14 +225,17 @@ export function AppShell({ children }: { children: ReactNode }) {
         >
           <Marca compacto={compacto} />
           <Navegacion compacto={compacto} />
-          <button
-            type="button"
-            onClick={alternarCompacto}
-            className="flex items-center gap-2 border-t border-sidebar-border px-5 py-3 text-xs text-sidebar-foreground/60 hover:text-sidebar-foreground"
-            title={compacto ? "Expandir menú" : "Contraer menú"}
-          >
-            {compacto ? <PanelLeftOpen className="mx-auto size-4" /> : <><PanelLeftClose className="size-4" /> Contraer menú</>}
-          </button>
+          <div className={cn("flex border-t border-sidebar-border", compacto ? "flex-col items-center gap-1 py-2" : "items-center justify-between pr-3")}>
+            <button
+              type="button"
+              onClick={alternarCompacto}
+              className={cn("flex items-center gap-2 text-xs text-sidebar-foreground/60 hover:text-sidebar-foreground", compacto ? "px-2 py-1" : "px-5 py-3")}
+              title={compacto ? "Expandir menú" : "Contraer menú"}
+            >
+              {compacto ? <PanelLeftOpen className="mx-auto size-4" /> : <><PanelLeftClose className="size-4" /> Contraer menú</>}
+            </button>
+            <VersionApp compacto={compacto} />
+          </div>
         </aside>
 
         <Sheet open={movil} onOpenChange={setMovil}>
@@ -236,6 +243,9 @@ export function AppShell({ children }: { children: ReactNode }) {
             <SheetTitle className="sr-only">Menú</SheetTitle>
             <Marca compacto={false} />
             <Navegacion compacto={false} onNavegar={() => setMovil(false)} />
+            <div className="border-t border-sidebar-border px-3 py-2">
+              <VersionApp />
+            </div>
           </SheetContent>
         </Sheet>
 
@@ -263,7 +273,8 @@ export function AppShell({ children }: { children: ReactNode }) {
               </Button>
             </div>
           </header>
-          <main className="min-w-0 flex-1 p-5 md:p-7">{children}</main>
+          <main className="min-w-0 flex-1 p-5 pb-24 md:p-7 md:pb-24">{children}</main>
+          <RegistroTurno />
         </div>
       </div>
     </TooltipProvider>
