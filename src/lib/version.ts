@@ -25,6 +25,7 @@ export const HISTORIAL: EntradaVersion[] = [
       "Asignación de campañas al editar un usuario.",
       "Supervisión y coordinación ven en «Resumen por persona» el cruce con el biométrico (diferencias y detalle por día) que sustenta cada observación.",
       "Conciliación de novedades: solo se comparan las horas reportadas; marcar de más en el biométrico ya no pide revisión.",
+      "Los días con horas anotadas («2 nocturnas», «7 dominicales», «8 domi + 3 noct») cuentan como días trabajados al cruzar con el biométrico.",
       "Versión visible en el menú con su historial de cambios.",
     ],
   },

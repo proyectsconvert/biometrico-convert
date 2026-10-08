@@ -38,8 +38,8 @@ export const conceptosQueFaltan = (x: Pick<Cruce, "conceptos">, tol: number) =>
  */
 export function diasPorRevisar(x: Pick<Cruce, "asiste_sin_marca" | "asiste_incompleta">) {
   return [
-    x.asiste_sin_marca ? `${x.asiste_sin_marca} día(s) con «Asiste» sin marcación` : "",
-    x.asiste_incompleta ? `${x.asiste_incompleta} día(s) con «Asiste» y marcación incompleta` : "",
+    x.asiste_sin_marca ? `${x.asiste_sin_marca} día(s) trabajados sin marcación` : "",
+    x.asiste_incompleta ? `${x.asiste_incompleta} día(s) trabajados con marcación incompleta` : "",
   ].filter(Boolean);
 }
 

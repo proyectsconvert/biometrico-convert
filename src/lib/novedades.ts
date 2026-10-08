@@ -194,6 +194,13 @@ export async function leerPlantilla(archivo: File): Promise<PlantillaNovedades> 
   throw new Error("No se encontró la tabla de personal (columna «DOCUMENTO») en ninguna hoja del archivo.");
 }
 
+/**
+ * Día trabajado: «Asiste» o un tipo que empieza con horas anotadas («2 nocturnas», «7 dominicales»,
+ * «8 domi + 3 noct»). Igual que public.es_dia_trabajado en la base.
+ */
+export const esDiaTrabajado = (t: string | null | undefined) =>
+  Boolean(t) && (norm(t!) === "asiste" || /^\s*\d/.test(t!));
+
 export function colorTipo(t: string): string {
   const n = norm(t);
   if (n === "asiste") return "bg-primary/15 text-foreground";

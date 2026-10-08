@@ -12,7 +12,7 @@ import { useAccess } from "@/lib/session";
 import { descargarCsv } from "@/lib/biometria";
 import * as XLSX from "xlsx";
 import { escribirLibro } from "@/lib/exportar";
-import { colorTipo, diaSemana, rangoFechas } from "@/lib/novedades";
+import { colorTipo, diaSemana, esDiaTrabajado, rangoFechas } from "@/lib/novedades";
 import { Paginador, usePaginado } from "@/components/simple-table";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -626,12 +626,14 @@ function DetalleDias({ fila }: { fila: FilaConciliacion }) {
             const tipo = datos.data?.dias.get(f);
             const j = datos.data?.jornadas.get(f);
             // Por revisar solo si se reporta más de lo marcado; marcar de más es informativo
-            const revisar = Boolean(fila.hay_biometria && tipo === "Asiste" && (!j || j.status === "incompleta"));
+            // «Asiste» y los días con horas anotadas («2 nocturnas»…) son días trabajados
+            const trabajado = esDiaTrabajado(tipo);
+            const revisar = Boolean(fila.hay_biometria && trabajado && (!j || j.status === "incompleta"));
             const alerta =
               !fila.hay_biometria ? "sin biometría"
-              : tipo === "Asiste" && !j ? "Asiste sin marcación"
-              : tipo === "Asiste" && j?.status === "incompleta" ? "Marcación incompleta"
-              : tipo && tipo !== "Asiste" && j?.status === "completa" ? `Marcó en día de ${tipo.toLowerCase()} (no afecta)`
+              : trabajado && !j ? "Reporta trabajo sin marcación"
+              : trabajado && j?.status === "incompleta" ? "Marcación incompleta"
+              : tipo && !trabajado && j?.status === "completa" ? `Marcó en día de ${tipo.toLowerCase()} (no afecta)`
               : !tipo && j ? "Marcó sin novedad en plantilla (no afecta)"
               : null;
             return (
