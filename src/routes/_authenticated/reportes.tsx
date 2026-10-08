@@ -20,6 +20,7 @@ import { Label } from "@/components/ui/label";
 import { Switch } from "@/components/ui/switch";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { cn } from "@/lib/utils";
+import { resultadoConciliacion, type ConceptoConciliacion } from "@/lib/conciliacion";
 
 export const Route = createFileRoute("/_authenticated/reportes")({
   head: () => ({ meta: [{ title: "Reportes — Convert-IA" }] }),
@@ -149,15 +150,23 @@ const REPORTES: Reporte[] = [
     id: "conciliacion", grupo: "Novedades", titulo: "Conciliación de nómina", icon: Scale,
     descripcion: "Plantilla de novedades frente al biométrico: lo reportado y lo que respalda la marcación, con el resultado y la revisión de nómina.",
     cargar: async (f) => {
-      const { data, error } = await supabase.rpc("conciliacion_novedades" as never, { _desde: f.desde, _hasta: f.hasta } as never);
+      const [{ data, error }, regla] = await Promise.all([
+        supabase.rpc("conciliacion_novedades" as never, { _desde: f.desde, _hasta: f.hasta } as never),
+        supabase.from("rules").select("value").eq("key", "tolerancia_conciliacion_horas").maybeSingle(),
+      ]);
       if (error) throw error;
+      const tol = Number(regla.data?.value ?? 0.5);
       const ESTADO: Record<string, string> = { coherente: "Coherente", advertencia: "Revisar días", inconsistente: "Inconsistente", sin_biometria: "Sin biometría", no_encontrado: "No encontrado" };
       return ((data as unknown as Crudo[]) ?? []).map((x: Crudo) => {
-        const c = (x.conceptos as { clave: string; reportado: number; biometrico: number }[]) ?? [];
-        const v = (k: string, t: "reportado" | "biometrico") => c.find((y) => y.clave === k)?.[t] ?? 0;
+        const c = (x.conceptos as ConceptoConciliacion[]) ?? [];
+        // Solo se concilian los bloques reportados: los no reportados quedan vacíos (no son horas por pagar)
+        const v = (k: string, t: "reportado" | "biometrico") => {
+          const y = c.find((z) => z.clave === k);
+          return y && y.reportado > 0 ? y[t] : "";
+        };
         return {
           documento: x.document, empleado: x.full_name, campana: x.campaign_label, periodo: `${x.period_start} a ${x.period_end}`,
-          resultado: ESTADO[String(x.estado)] ?? x.estado,
+          resultado: ESTADO[resultadoConciliacion(x, tol)] ?? x.estado,
           nocturnas_reportadas: v("nocturnas", "reportado"), nocturnas_biometrico: v("nocturnas", "biometrico"),
           dom_fest_reportadas: v("dom_fest", "reportado"), dom_fest_biometrico: v("dom_fest", "biometrico"),
           extra_diurnas_reportadas: v("extra_diurnas", "reportado"), extra_diurnas_biometrico: v("extra_diurnas", "biometrico"),

@@ -20,6 +20,7 @@ import { Card } from "@/components/ui/card";
 import { Textarea } from "@/components/ui/textarea";
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { cn } from "@/lib/utils";
+import { conceptosQueFaltan, conceptosReportados, diasPorRevisar } from "@/lib/conciliacion";
 
 type Concepto = { clave: string; etiqueta: string; reportado: number; biometrico: number };
 export type FilaConciliacion = {
@@ -75,7 +76,7 @@ const ADECCO: { horas: string; ajuste: string; novedad: string }[] = [
 ];
 
 /** Solo se concilian quienes reportan horas; asistencia, descansos y faltas van en «Novedades por día». */
-const reportaHoras = (x: FilaConciliacion) => x.conceptos.some((c) => c.reportado > 0);
+const reportaHoras = (x: FilaConciliacion) => conceptosReportados(x).length > 0;
 
 type Sugerencia = {
   tipo: "aprobar" | "observar" | "revisar" | "esperar" | "crear";
@@ -92,12 +93,10 @@ function sugerir(x: FilaConciliacion, tol: number): Sugerencia {
   if (x.estado === "sin_biometria") {
     return { tipo: "esperar", titulo: "Faltan marcaciones del biométrico", detalle: `No hay marcaciones cargadas del ${fechaCorta(x.period_start)} al ${fechaCorta(x.period_end)}. Carga esos CSV en Importaciones antes de aprobar.` };
   }
-  const faltan = x.conceptos.filter((c) => c.reportado - c.biometrico > tol);
-  const dias = [
-    x.asiste_sin_marca ? `${x.asiste_sin_marca} día(s) con «Asiste» sin marcación` : "",
-    x.asiste_incompleta ? `${x.asiste_incompleta} día(s) con «Asiste» y marcación incompleta` : "",
-    x.marca_en_novedad ? `${x.marca_en_novedad} día(s) con marcación en un día de novedad` : "",
-  ].filter(Boolean);
+  // Solo los bloques reportados; los no reportados no se mencionan (no son horas por pagar)
+  const faltan = conceptosQueFaltan(x, tol);
+  // Solo días donde se reporta más de lo marcado; marcar de más no se revisa
+  const dias = diasPorRevisar(x);
   if (faltan.length) {
     const lista = faltan.map((c) => `${nombreConcepto(c.etiqueta)}: reporta ${h(c.reportado)} h y el biométrico respalda ${h(c.biometrico)} h (faltan ${h(c.reportado - c.biometrico)} h)`);
     return {
@@ -115,7 +114,13 @@ function sugerir(x: FilaConciliacion, tol: number): Sugerencia {
       comentario: `Las horas reportadas cuadran con el biométrico, pero hay ${dias.join(", ")}. Por favor revisar.`,
     };
   }
-  return { tipo: "aprobar", titulo: "Cuadra: sugerimos aprobar", detalle: "El biométrico respalda todas las horas reportadas." };
+  return {
+    tipo: "aprobar",
+    titulo: "Cuadra: sugerimos aprobar",
+    detalle: x.marca_en_novedad
+      ? `El biométrico respalda todas las horas reportadas. Marcó ${x.marca_en_novedad} día(s) de más (en días de novedad): no afecta lo reportado.`
+      : "El biométrico respalda todas las horas reportadas.",
+  };
 }
 
 const ESTILO: Record<Sugerencia["tipo"], { caja: string; icono: ReactNode; chip: string }> = {
@@ -258,9 +263,11 @@ export function ConciliacionNovedades({
           resultado: ESTILO[sug.tipo].chip,
           sugerencia: `${sug.titulo}. ${sug.detalle}`,
         };
+        // Los bloques no reportados quedan vacíos: no se concilian ni se leen como horas por pagar
         for (const c of x.conceptos) {
-          fila[`${nombreConcepto(c.etiqueta)} reportado`] = c.reportado;
-          fila[`${nombreConcepto(c.etiqueta)} biometrico`] = c.biometrico;
+          const reportado = c.reportado > 0;
+          fila[`${nombreConcepto(c.etiqueta)} reportado`] = reportado ? c.reportado : "";
+          fila[`${nombreConcepto(c.etiqueta)} biometrico`] = reportado ? c.biometrico : "";
         }
         return {
           ...fila,
@@ -294,7 +301,7 @@ export function ConciliacionNovedades({
           <p className="font-medium">¿Qué es la conciliación?</p>
           <p className="text-muted-foreground">
             Compara las <b>horas que reporta el supervisor</b> (nocturnas, dominicales/festivos y extras) con las que <b>respalda el biométrico</b>.
-            Si lo reportado no supera lo marcado en más de {h(tol)} h, cuadra y se sugiere aprobar; si no, se sugiere observar con el comentario ya escrito.
+            Solo se comparan los bloques de horas que se reportan. Si el biométrico respalda igual o más de lo reportado (con {h(tol)} h de tolerancia), cuadra y se sugiere aprobar; si se reporta más de lo marcado, se sugiere observar con el comentario ya escrito. Las horas que no se reportan no se muestran ni se mencionan en las observaciones.
           </p>
           {sinHoras > 0 ? (
             <p className="text-muted-foreground">
@@ -395,7 +402,8 @@ function TarjetaPersona({ x, sug, tol, abierta, alAbrir, puedeAprobar, trabajand
   alAprobar: () => void; alObservar: () => void; alReabrir: () => void;
 }) {
   const e = ESTILO[sug.tipo];
-  const conceptos = x.conceptos.filter((c) => c.reportado > 0 || c.biometrico > 0);
+  // Solo lo reportado: lo no reportado no se muestra (no se observa ni se considera para pago)
+  const conceptos = conceptosReportados(x);
   const extras = [x.ajustes ? `ajustes ${h(x.ajustes)} h` : "", x.bonificacion ? `bonificación ${h(x.bonificacion)}` : "", x.comisiones ? `comisiones ${h(x.comisiones)}` : ""].filter(Boolean);
   return (
     <Card className="overflow-hidden">
@@ -440,7 +448,7 @@ function TarjetaPersona({ x, sug, tol, abierta, alAbrir, puedeAprobar, trabajand
                   <td className="py-1.5 text-right tabular-nums">{h(c.reportado)} h</td>
                   <td className="py-1.5 text-right tabular-nums">{x.hay_biometria ? `${h(c.biometrico)} h` : "—"}</td>
                   <td className={cn("py-1.5 pl-4 text-xs", falta ? "font-medium text-destructive" : "text-muted-foreground")}>
-                    {!x.hay_biometria ? "sin datos" : falta ? `faltan ${h(dif)} h` : c.reportado ? "✓ respaldado" : "no reportadas"}
+                    {!x.hay_biometria ? "sin datos" : falta ? `faltan ${h(dif)} h` : "✓ respaldado"}
                   </td>
                 </tr>
               );
@@ -545,12 +553,14 @@ function DetalleDias({ fila }: { fila: FilaConciliacion }) {
           {fechas.map((f) => {
             const tipo = datos.data?.dias.get(f);
             const j = datos.data?.jornadas.get(f);
+            // Por revisar solo si se reporta más de lo marcado; marcar de más es informativo
+            const revisar = Boolean(fila.hay_biometria && tipo === "Asiste" && (!j || j.status === "incompleta"));
             const alerta =
               !fila.hay_biometria ? "sin biometría"
               : tipo === "Asiste" && !j ? "Asiste sin marcación"
               : tipo === "Asiste" && j?.status === "incompleta" ? "Marcación incompleta"
-              : tipo && tipo !== "Asiste" && j?.status === "completa" ? `Marcó en día de ${tipo.toLowerCase()}`
-              : !tipo && j ? "Marcó sin novedad en plantilla"
+              : tipo && tipo !== "Asiste" && j?.status === "completa" ? `Marcó en día de ${tipo.toLowerCase()} (no afecta)`
+              : !tipo && j ? "Marcó sin novedad en plantilla (no afecta)"
               : null;
             return (
               <tr key={f} className="border-t">
@@ -562,7 +572,7 @@ function DetalleDias({ fila }: { fila: FilaConciliacion }) {
                 <td className="tabular-nums">{hm(j?.overtime_minutes ?? 0)}</td>
                 <td className="tabular-nums">{hm(j?.night_minutes ?? 0)}</td>
                 <td className="tabular-nums">{hm(j?.sunday_holiday_minutes ?? 0)}</td>
-                <td className={cn(alerta && alerta !== "sin biometría" ? "font-medium text-amber-700 dark:text-amber-400" : "text-muted-foreground")}>{alerta ?? "✓"}</td>
+                <td className={cn(revisar ? "font-medium text-amber-700 dark:text-amber-400" : "text-muted-foreground")}>{alerta ?? "✓"}</td>
               </tr>
             );
           })}
