@@ -23,6 +23,7 @@ export const HISTORIAL: EntradaVersion[] = [
       "Botón flotante para iniciar y finalizar turno (todos los roles excepto Super Administrador, Administrador y Nómina), con equipo, red y ubicación.",
       "Registro de turnos: tiempo conectado frente a tiempo en la empresa y alarmas al cruzar con el biométrico (inicio antes de la huella, fin después de la salida, sin huella, sin cierre).",
       "Asignación de campañas al editar un usuario.",
+      "Supervisión y coordinación ven en «Resumen por persona» el cruce con el biométrico (diferencias y detalle por día) que sustenta cada observación.",
       "Conciliación de novedades: solo se comparan las horas reportadas; marcar de más en el biométrico ya no pide revisión.",
       "Versión visible en el menú con su historial de cambios.",
     ],

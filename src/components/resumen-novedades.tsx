@@ -9,6 +9,7 @@ import { supabase } from "@/integrations/supabase/client";
 import { CONCEPTOS, colorTipo, type CampoConcepto } from "@/lib/novedades";
 import { ChipArchivo, VisorDocumento, subirEvidencias, type Archivo } from "@/components/visor-documento";
 import { Paginador, usePaginado } from "@/components/simple-table";
+import { CruceBiometrico, type FilaConciliacion } from "@/components/conciliacion-novedades";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
@@ -114,6 +115,31 @@ export function ResumenNovedades({ totales, entradas, cargando, puedeAprobar, pu
     },
   });
   const eventosDe = (id: string) => (eventos.data ?? []).filter((e) => e.total_id === id);
+
+  // Cruce con el biométrico (el mismo de la conciliación de Nómina; cada rol ve solo su personal)
+  const rango = useMemo(() => {
+    if (!totales.length) return null;
+    return [
+      totales.reduce((m, x) => (x.period_start < m ? x.period_start : m), totales[0]!.period_start),
+      totales.reduce((m, x) => (x.period_end > m ? x.period_end : m), totales[0]!.period_end),
+    ] as const;
+  }, [totales]);
+  const cruce = useQuery({
+    queryKey: ["nov-conciliacion", rango?.[0], rango?.[1]],
+    enabled: Boolean(rango) && abierta !== null,
+    queryFn: async () => {
+      const { data, error } = await supabase.rpc("conciliacion_novedades" as never, { _desde: rango![0], _hasta: rango![1] } as never);
+      if (error) throw error;
+      return new Map(((data as unknown as FilaConciliacion[]) ?? []).map((f) => [f.id, f]));
+    },
+  });
+  const tolerancia = useQuery({
+    queryKey: ["reglas", "tolerancia_conciliacion_horas"],
+    queryFn: async () => {
+      const { data } = await supabase.from("rules").select("value").eq("key", "tolerancia_conciliacion_horas").maybeSingle();
+      return Number(data?.value ?? 0.5);
+    },
+  });
 
   async function revisar(t: TotalResumen, estado: "aprobado" | "observado" | "rechazado" | "pendiente", comentario?: string) {
     setTrabajando(true);
@@ -236,6 +262,13 @@ export function ResumenNovedades({ totales, entradas, cargando, puedeAprobar, pu
                             </tbody>
                           </table>
                         ) : <p className="text-xs text-muted-foreground">Sin horas reportadas en este periodo.</p>}
+                        {horasDe(t).length ? (
+                          cruce.data?.get(t.id) ? (
+                            <CruceBiometrico fila={cruce.data.get(t.id)!} tol={tolerancia.data ?? 0.5} />
+                          ) : cruce.isLoading ? (
+                            <p className="text-xs text-muted-foreground"><Loader2 className="mr-1 inline size-3.5 animate-spin" />Cruzando con el biométrico…</p>
+                          ) : null
+                        ) : null}
                         {t.observaciones ? <p className="text-xs"><b>Observaciones de la plantilla:</b> {t.observaciones}</p> : null}
 
                         <Historial eventos={eventosDe(t.id)} cargando={eventos.isLoading} onAbrir={setArchivo} />

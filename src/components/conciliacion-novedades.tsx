@@ -493,6 +493,78 @@ function TarjetaPersona({ x, sug, tol, abierta, alAbrir, puedeAprobar, trabajand
   );
 }
 
+/** Títulos para quien reporta (operación): explican el resultado, no sugieren una acción de Nómina. */
+const TITULO_OPERACION: Record<Sugerencia["tipo"], string> = {
+  aprobar: "Cuadra con el biométrico",
+  observar: "No cuadra con el biométrico",
+  revisar: "Las horas cuadran, pero hay días por revisar",
+  esperar: "Faltan marcaciones del biométrico",
+  crear: "No se puede validar",
+};
+
+/**
+ * Evidencia del cruce (lo mismo que revisa Nómina) para que supervisión y coordinación vean por qué
+ * se observó: horas reportadas frente al biométrico, la diferencia y el detalle por día.
+ */
+export function CruceBiometrico({ fila, tol }: { fila: FilaConciliacion; tol: number }) {
+  const [dias, setDias] = useState(false);
+  const sug = sugerir(fila, tol);
+  const e = ESTILO[sug.tipo];
+  const conceptos = conceptosReportados(fila);
+  return (
+    <div className="space-y-2 rounded-lg border p-3">
+      <p className="text-xs font-medium text-muted-foreground">Cruce con el biométrico · lo mismo que revisa Nómina</p>
+      <div className={cn("flex items-start gap-2 rounded-lg border p-2.5 text-sm", e.caja)}>
+        <span className="mt-0.5">{e.icono}</span>
+        <div className="min-w-0">
+          <p className="font-medium">{TITULO_OPERACION[sug.tipo]}</p>
+          <p className="text-xs text-muted-foreground">{sug.detalle}</p>
+        </div>
+      </div>
+      {conceptos.length && fila.hay_biometria ? (
+        <table className="w-full max-w-2xl text-sm">
+          <thead>
+            <tr className="text-left text-xs text-muted-foreground">
+              <th className="pb-1 font-medium">Horas</th>
+              <th className="pb-1 text-right font-medium">Reportadas</th>
+              <th className="pb-1 text-right font-medium">Biométrico</th>
+              <th className="pb-1 text-right font-medium">Diferencia</th>
+              <th className="pb-1 pl-4 font-medium">Resultado</th>
+            </tr>
+          </thead>
+          <tbody>
+            {conceptos.map((c) => {
+              const dif = c.reportado - c.biometrico;
+              const falta = dif > tol;
+              return (
+                <tr key={c.clave} className="border-t">
+                  <td className="py-1.5">{nombreConcepto(c.etiqueta)}</td>
+                  <td className="py-1.5 text-right tabular-nums">{h(c.reportado)} h</td>
+                  <td className="py-1.5 text-right tabular-nums">{h(c.biometrico)} h</td>
+                  <td className={cn("py-1.5 text-right tabular-nums", falta ? "font-medium text-destructive" : "text-muted-foreground")}>
+                    {dif > 0 ? `+${h(dif)} h` : "—"}
+                  </td>
+                  <td className={cn("py-1.5 pl-4 text-xs", falta ? "font-medium text-destructive" : "text-muted-foreground")}>
+                    {falta ? `${h(dif)} h sin respaldo` : "✓ respaldado"}
+                  </td>
+                </tr>
+              );
+            })}
+          </tbody>
+        </table>
+      ) : null}
+      {fila.hay_biometria ? (
+        <>
+          <Button size="sm" variant="ghost" className="-ml-2" onClick={() => setDias((v) => !v)}>
+            {dias ? <ChevronDown className="size-4" /> : <ChevronRight className="size-4" />} Detalle por día (entrada, salida y horas del biométrico)
+          </Button>
+          {dias ? <div className="rounded-md border bg-muted/20"><DetalleDias fila={fila} /></div> : null}
+        </>
+      ) : null}
+    </div>
+  );
+}
+
 function ObservarDialog({ estado, onClose, onGuardar }: { estado: { fila: FilaConciliacion; comentario: string } | null; onClose: () => void; onGuardar: (c: string) => void }) {
   const [comentario, setComentario] = useState("");
   useEffect(() => { setComentario(estado?.comentario ?? ""); }, [estado]);
