@@ -132,9 +132,14 @@ export function ResumenNovedades({ totales, entradas, cargando, puedeAprobar, pu
     queryFn: async () => {
       const { data, error } = await supabase.rpc("conciliacion_novedades" as never, { _desde: rango![0], _hasta: rango![1] } as never);
       if (error) throw error;
-      return new Map(((data as unknown as FilaConciliacion[]) ?? []).map((f) => [f.id, f]));
+      // Misma forma (lista) que la pestaña Conciliación: comparten la caché con esta clave
+      return (data as unknown as FilaConciliacion[]) ?? [];
     },
   });
+  const crucePorId = useMemo(
+    () => new Map((Array.isArray(cruce.data) ? cruce.data : []).map((f) => [f.id, f])),
+    [cruce.data],
+  );
   const tolerancia = useQuery({
     queryKey: ["reglas", "tolerancia_conciliacion_horas"],
     queryFn: async () => {
@@ -268,8 +273,8 @@ export function ResumenNovedades({ totales, entradas, cargando, puedeAprobar, pu
                           </table>
                         ) : <p className="text-xs text-muted-foreground">Sin horas reportadas en este periodo.</p>}
                         {(
-                          cruce.data?.get(t.id) ? (
-                            <CruceBiometrico fila={cruce.data.get(t.id)!} tol={tolerancia.data ?? 0.5} />
+                          crucePorId.get(t.id) ? (
+                            <CruceBiometrico fila={crucePorId.get(t.id)!} tol={tolerancia.data ?? 0.5} />
                           ) : cruce.isLoading ? (
                             <p className="text-xs text-muted-foreground"><Loader2 className="mr-1 inline size-3.5 animate-spin" />Cruzando con el biométrico…</p>
                           ) : null
