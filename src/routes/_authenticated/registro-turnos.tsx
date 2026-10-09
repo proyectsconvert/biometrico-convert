@@ -21,6 +21,8 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Switch } from "@/components/ui/switch";
 import { cn } from "@/lib/utils";
+import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import { ConfiguracionTurnos } from "@/components/configuracion-turnos";
 
 export const Route = createFileRoute("/_authenticated/registro-turnos")({
   head: () => ({ meta: [{ title: "Registro de turnos — Convert-IA" }] }),
@@ -217,6 +219,12 @@ function RegistroTurnos() {
         }
       />
 
+      <Tabs defaultValue="registros">
+        <TabsList className="mb-3">
+          <TabsTrigger value="registros">Registros</TabsTrigger>
+          <TabsTrigger value="configuracion">Configuración</TabsTrigger>
+        </TabsList>
+        <TabsContent value="registros">
       <Card className="mb-4 flex flex-wrap items-end gap-4 p-4">
         <div className="space-y-1">
           <Label>Desde</Label>
@@ -419,6 +427,11 @@ function RegistroTurnos() {
         ser después de la huella de entrada y el fin antes de la huella de salida (tolerancia en
         Reglas de cálculo: «tolerancia_registro_turno_min»).
       </p>
+        </TabsContent>
+        <TabsContent value="configuracion">
+          <ConfiguracionTurnos />
+        </TabsContent>
+      </Tabs>
     </div>
   );
 }

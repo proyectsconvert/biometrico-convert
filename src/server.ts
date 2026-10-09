@@ -27,6 +27,16 @@ if (
     .catch((e) => console.error("[reproceso] no se pudo iniciar el vigilante", e));
 }
 
+// Alarmas de turnos abiertos que pasan el tiempo configurado (cada minuto, sin depender del tablero)
+if (
+  typeof process !== "undefined" &&
+  (process.env["NODE_ENV"] === "production" || process.env["REPROCESO_VIGILANTE"] === "1")
+) {
+  void import("./lib/alarmas-turno.server")
+    .then((m: { vigilarAlarmasTurno: () => void }) => m.vigilarAlarmasTurno())
+    .catch((e) => console.error("[alarmas-turno] no se pudo iniciar el vigilante", e));
+}
+
 type ServerEntry = {
   fetch: (request: Request, env: unknown, ctx: unknown) => Promise<Response> | Response;
 };

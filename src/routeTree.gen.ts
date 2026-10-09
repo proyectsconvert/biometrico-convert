@@ -23,6 +23,7 @@ import { Route as AuthenticatedEmpleadosRouteImport } from './routes/_authentica
 import { Route as AuthenticatedEmpresasRouteImport } from './routes/_authenticated/empresas'
 import { Route as AuthenticatedFestivosRouteImport } from './routes/_authenticated/festivos'
 import { Route as AuthenticatedImportacionesRouteImport } from './routes/_authenticated/importaciones'
+import { Route as AuthenticatedInicioTurnoRouteImport } from './routes/_authenticated/inicio-turno'
 import { Route as AuthenticatedJornadaRouteImport } from './routes/_authenticated/jornada'
 import { Route as AuthenticatedMarcacionesRouteImport } from './routes/_authenticated/marcaciones'
 import { Route as AuthenticatedNotificacionesRouteImport } from './routes/_authenticated/notificaciones'
@@ -109,6 +110,12 @@ const AuthenticatedImportacionesRoute =
     path: '/importaciones',
     getParentRoute: () => AuthenticatedRouteRoute,
   } as any)
+const AuthenticatedInicioTurnoRoute =
+  AuthenticatedInicioTurnoRouteImport.update({
+    id: '/inicio-turno',
+    path: '/inicio-turno',
+    getParentRoute: () => AuthenticatedRouteRoute,
+  } as any)
 const AuthenticatedJornadaRoute = AuthenticatedJornadaRouteImport.update({
   id: '/jornada',
   path: '/jornada',
@@ -187,6 +194,7 @@ export interface FileRoutesByFullPath {
   '/empresas': typeof AuthenticatedEmpresasRoute
   '/festivos': typeof AuthenticatedFestivosRoute
   '/importaciones': typeof AuthenticatedImportacionesRoute
+  '/inicio-turno': typeof AuthenticatedInicioTurnoRoute
   '/jornada': typeof AuthenticatedJornadaRoute
   '/marcaciones': typeof AuthenticatedMarcacionesRoute
   '/notificaciones': typeof AuthenticatedNotificacionesRoute
@@ -214,6 +222,7 @@ export interface FileRoutesByTo {
   '/empresas': typeof AuthenticatedEmpresasRoute
   '/festivos': typeof AuthenticatedFestivosRoute
   '/importaciones': typeof AuthenticatedImportacionesRoute
+  '/inicio-turno': typeof AuthenticatedInicioTurnoRoute
   '/jornada': typeof AuthenticatedJornadaRoute
   '/marcaciones': typeof AuthenticatedMarcacionesRoute
   '/notificaciones': typeof AuthenticatedNotificacionesRoute
@@ -243,6 +252,7 @@ export interface FileRoutesById {
   '/_authenticated/empresas': typeof AuthenticatedEmpresasRoute
   '/_authenticated/festivos': typeof AuthenticatedFestivosRoute
   '/_authenticated/importaciones': typeof AuthenticatedImportacionesRoute
+  '/_authenticated/inicio-turno': typeof AuthenticatedInicioTurnoRoute
   '/_authenticated/jornada': typeof AuthenticatedJornadaRoute
   '/_authenticated/marcaciones': typeof AuthenticatedMarcacionesRoute
   '/_authenticated/notificaciones': typeof AuthenticatedNotificacionesRoute
@@ -272,6 +282,7 @@ export interface FileRouteTypes {
     | '/empresas'
     | '/festivos'
     | '/importaciones'
+    | '/inicio-turno'
     | '/jornada'
     | '/marcaciones'
     | '/notificaciones'
@@ -299,6 +310,7 @@ export interface FileRouteTypes {
     | '/empresas'
     | '/festivos'
     | '/importaciones'
+    | '/inicio-turno'
     | '/jornada'
     | '/marcaciones'
     | '/notificaciones'
@@ -327,6 +339,7 @@ export interface FileRouteTypes {
     | '/_authenticated/empresas'
     | '/_authenticated/festivos'
     | '/_authenticated/importaciones'
+    | '/_authenticated/inicio-turno'
     | '/_authenticated/jornada'
     | '/_authenticated/marcaciones'
     | '/_authenticated/notificaciones'
@@ -447,6 +460,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof AuthenticatedImportacionesRouteImport
       parentRoute: typeof AuthenticatedRouteRoute
     }
+    '/_authenticated/inicio-turno': {
+      id: '/_authenticated/inicio-turno'
+      path: '/inicio-turno'
+      fullPath: '/inicio-turno'
+      preLoaderRoute: typeof AuthenticatedInicioTurnoRouteImport
+      parentRoute: typeof AuthenticatedRouteRoute
+    }
     '/_authenticated/jornada': {
       id: '/_authenticated/jornada'
       path: '/jornada'
@@ -546,6 +566,7 @@ interface AuthenticatedRouteRouteChildren {
   AuthenticatedEmpresasRoute: typeof AuthenticatedEmpresasRoute
   AuthenticatedFestivosRoute: typeof AuthenticatedFestivosRoute
   AuthenticatedImportacionesRoute: typeof AuthenticatedImportacionesRoute
+  AuthenticatedInicioTurnoRoute: typeof AuthenticatedInicioTurnoRoute
   AuthenticatedJornadaRoute: typeof AuthenticatedJornadaRoute
   AuthenticatedMarcacionesRoute: typeof AuthenticatedMarcacionesRoute
   AuthenticatedNotificacionesRoute: typeof AuthenticatedNotificacionesRoute
@@ -572,6 +593,7 @@ const AuthenticatedRouteRouteChildren: AuthenticatedRouteRouteChildren = {
   AuthenticatedEmpresasRoute: AuthenticatedEmpresasRoute,
   AuthenticatedFestivosRoute: AuthenticatedFestivosRoute,
   AuthenticatedImportacionesRoute: AuthenticatedImportacionesRoute,
+  AuthenticatedInicioTurnoRoute: AuthenticatedInicioTurnoRoute,
   AuthenticatedJornadaRoute: AuthenticatedJornadaRoute,
   AuthenticatedMarcacionesRoute: AuthenticatedMarcacionesRoute,
   AuthenticatedNotificacionesRoute: AuthenticatedNotificacionesRoute,

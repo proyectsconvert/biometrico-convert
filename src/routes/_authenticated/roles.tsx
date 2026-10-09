@@ -29,7 +29,7 @@ type Permiso = { id: string; module: string; action: string };
 const GRUPOS: { titulo: string; modulos: [string, string][] }[] = [
   { titulo: "Inicio", modulos: [["dashboard", "Panel"], ["reportes", "Reportes"]] },
   { titulo: "Personal", modulos: [["empleados", "Empleados"], ["empleadores", "Empleadores"], ["campanas", "Campañas"], ["centros_costo", "Centros de costo"]] },
-  { titulo: "Asistencia", modulos: [["importaciones", "Importaciones"], ["asistencia", "Control diario"], ["marcaciones", "Marcaciones"], ["turnos", "Turnos"], ["registro_turnos", "Registro de turnos"]] },
+  { titulo: "Asistencia", modulos: [["importaciones", "Importaciones"], ["asistencia", "Control diario"], ["marcaciones", "Marcaciones"], ["turnos", "Turnos"], ["registro_turnos", "Registro de turnos"], ["inicio_turno", "Inicio turno (dashboard)"]] },
   { titulo: "Novedades", modulos: [["novedades", "Novedades y conciliación"]] },
   {
     titulo: "Administración",
@@ -39,7 +39,7 @@ const GRUPOS: { titulo: string; modulos: [string, string][] }[] = [
 const ACCIONES: [string, string][] = [
   ["ver", "Ver"], ["crear", "Crear"], ["editar", "Editar"], ["eliminar", "Eliminar"], ["importar", "Importar"], ["exportar", "Exportar"],
   ["aprobar", "Aprobar"], ["rechazar", "Rechazar"], ["ajustar", "Ajustar"], ["configurar", "Configurar"], ["depurar", "Depurar"], ["asignar", "Asignar"],
-  ["exportar_adecco", "Exportar Adecco"], ["calculo_horas_extra", "Cálculo horas extra"], ["eliminar_plantillas", "Borrar plantillas"],
+  ["exportar_adecco", "Exportar Adecco"], ["calculo_horas_extra", "Cálculo horas extra"], ["eliminar_plantillas", "Borrar plantillas"], ["gestionar", "Gestionar"],
 ];
 const PLANTILLAS: { id: string; label: string; acciones: string[] | null }[] = [
   { id: "todo", label: "Acceso total", acciones: null },

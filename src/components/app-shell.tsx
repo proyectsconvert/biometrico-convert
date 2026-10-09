@@ -27,6 +27,7 @@ import {
   FileBarChart,
   DatabaseZap,
   Timer,
+  Activity,
 } from "lucide-react";
 import { Sheet, SheetContent, SheetTitle } from "@/components/ui/sheet";
 import { Tooltip, TooltipContent, TooltipTrigger, TooltipProvider } from "@/components/ui/tooltip";
@@ -71,6 +72,7 @@ const GRUPOS: { titulo: string; items: Item[] }[] = [
       { to: "/marcaciones", label: "Marcaciones", icon: Fingerprint, module: "marcaciones" },
       { to: "/turnos", label: "Turnos", icon: Clock, module: "turnos" },
       { to: "/registro-turnos", label: "Registro de turnos", icon: Timer, module: "registro_turnos" },
+      { to: "/inicio-turno", label: "Inicio turno", icon: Activity, module: "inicio_turno" },
     ],
   },
   {
