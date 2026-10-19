@@ -10,6 +10,7 @@ import { accesosUsuarios, actualizarUsuario, cambiarContrasena, eliminarUsuario,
 import { PageHeader } from "@/components/app-shell";
 import { Paginador, SimpleTable, ordenarFilas, usePaginado, type Orden } from "@/components/simple-table";
 import { CrearUsuarios } from "@/components/crear-usuarios";
+import { SelectorCargos } from "@/components/selector-cargos";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Card } from "@/components/ui/card";
@@ -532,17 +533,21 @@ function RolesUsuario({
       if (!rolId) throw new Error("Selecciona un rol.");
       if (requiereCampanas && !campSel.length) throw new Error("Selecciona al menos una campaña.");
       if (porCargos && !cargosSel.length) throw new Error("Selecciona al menos un cargo.");
-      const { error } = await supabase.from("user_roles").insert({
-        user_id: perfil.id,
-        role_id: rolId,
-        tenant_id: acceso.tenantId,
-        scope,
-        campaign_ids: requiereCampanas ? campSel : [],
-        cargos: porCargos ? cargosSel : [],
-      } as never);
+      const valores = { scope, campaign_ids: requiereCampanas ? campSel : [], cargos: porCargos ? cargosSel : [] };
+      // Si ya tiene ese rol, se actualiza su alcance (campañas o cargos) en vez de duplicarlo
+      const existente = asignaciones.find((a) => a.roles?.id === rolId);
+      const { error } = existente
+        ? await supabase.from("user_roles").update(valores as never).eq("id", existente.id)
+        : await supabase.from("user_roles").insert({ user_id: perfil.id, role_id: rolId, tenant_id: acceso.tenantId, ...valores } as never);
       if (error) throw error;
+      return Boolean(existente);
     },
-    onSuccess: () => { toast.success("Rol asignado"); setRolId(""); setCampSel([]); setCargosSel([]); onCambio(); },
+    onSuccess: (actualizado) => {
+      toast.success(actualizado ? "Rol actualizado" : "Rol asignado", {
+        description: actualizado ? "Ya tenía ese rol: se reemplazaron su alcance, campañas o cargos." : undefined,
+      });
+      setRolId(""); setCampSel([]); setCargosSel([]); onCambio();
+    },
     onError: (e: Error) => toast.error("No se pudo asignar", { description: e.message }),
   });
 
@@ -620,6 +625,13 @@ function RolesUsuario({
             else if (c === "asesor") setScope("solo_yo"); // el asesor solo ve lo suyo
             else if (["supervisor", "coordinador", "bo"].includes(c)) setScope("campanas_asignadas");
             else if (c === "supervisor_area") setScope("cargos_asignados");
+            // Si ya tiene ese rol, se parte de su alcance actual (se agrega o quita sobre lo que tiene)
+            const ya = asignaciones.find((x) => x.roles?.id === v);
+            if (ya) {
+              setScope(ya.scope as Alcance);
+              setCampSel(ya.campaign_ids ?? []);
+              setCargosSel(ya.cargos ?? []);
+            }
           }}
         >
           <SelectTrigger><SelectValue placeholder="Selecciona un rol" /></SelectTrigger>
@@ -756,67 +768,6 @@ function EditarCampanasRol({
         <Button size="sm" onClick={() => guardar.mutate()} disabled={guardar.isPending}>
           {guardar.isPending ? <Loader2 className="size-4 animate-spin" /> : null} Guardar
         </Button>
-      </div>
-    </div>
-  );
-}
-
-/**
- * Cargos que supervisa un supervisor de área (calidad, formación, BO…): ve a todas las personas con esos
- * cargos, en cualquier campaña o centro de costo, sin acceso a las campañas.
- */
-function SelectorCargos({ sel, onChange }: { sel: string[]; onChange: (v: string[]) => void }) {
-  const [filtro, setFiltro] = useState("");
-  const cargos = useQuery({
-    queryKey: ["cargos-empleados"],
-    queryFn: async () => {
-      const { data, error } = await supabase.from("employees").select("position").eq("status", "activo").limit(20000);
-      if (error) throw error;
-      const cuenta = new Map<string, number>();
-      for (const e of (data ?? []) as { position: string | null }[]) {
-        const c = (e.position ?? "").trim().toUpperCase();
-        if (c) cuenta.set(c, (cuenta.get(c) ?? 0) + 1);
-      }
-      return [...cuenta.entries()].map(([cargo, n]) => ({ cargo, n })).sort((a, b) => a.cargo.localeCompare(b.cargo));
-    },
-  });
-  const sinTildes = (t: string) => t.normalize("NFD").replace(/[\u0300-\u036f]/g, "").toLowerCase();
-  const lista = [
-    ...(cargos.data ?? []),
-    ...sel.filter((c) => !(cargos.data ?? []).some((x) => x.cargo === c)).map((cargo) => ({ cargo, n: 0 })),
-  ];
-  const visibles = lista.filter((x) => sinTildes(x.cargo).includes(sinTildes(filtro.trim())));
-  return (
-    <div className="space-y-1">
-      <p className="text-xs text-muted-foreground">
-        Verá a todas las personas con estos cargos, en cualquier campaña o centro de costo, y su propia información. No ve
-        las campañas. Marca también las variantes (p. ej. «(PERIODO DE PRUEBA)»).
-      </p>
-      <div className="flex items-center justify-between gap-2 text-xs text-muted-foreground">
-        <span>{sel.length} cargo(s) seleccionado(s)</span>
-        {filtro.trim() && visibles.length ? (
-          <button type="button" className="text-primary hover:underline" onClick={() => onChange([...new Set([...sel, ...visibles.map((x) => x.cargo)])])}>
-            Marcar los {visibles.length} que coinciden
-          </button>
-        ) : null}
-      </div>
-      <Input value={filtro} onChange={(e) => setFiltro(e.target.value)} placeholder="Buscar cargo (p. ej. calidad, formador)" className="h-8" />
-      <div className="max-h-52 space-y-1 overflow-auto rounded-md border bg-background p-2">
-        {cargos.isLoading ? (
-          <p className="text-xs text-muted-foreground">Cargando cargos…</p>
-        ) : (
-          visibles.map((x) => (
-            <label key={x.cargo} className="flex items-center gap-2 text-sm">
-              <input
-                type="checkbox"
-                checked={sel.includes(x.cargo)}
-                onChange={(e) => onChange(e.target.checked ? [...sel, x.cargo] : sel.filter((c) => c !== x.cargo))}
-              />
-              <span className="flex-1">{x.cargo}</span>
-              <span className="text-xs tabular-nums text-muted-foreground">{x.n}</span>
-            </label>
-          ))
-        )}
       </div>
     </div>
   );

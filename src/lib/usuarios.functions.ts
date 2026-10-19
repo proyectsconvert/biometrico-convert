@@ -10,6 +10,7 @@ const UsuarioSchema = z.object({
   rol: z.string().trim().min(1).max(50),
   campanas: z.string().trim().max(500).optional(),
   documento: z.string().trim().max(20).optional(),
+  cargos: z.array(z.string().trim().min(1).max(150)).max(200).optional(),
 });
 
 export type NuevoUsuario = z.infer<typeof UsuarioSchema>;
@@ -20,19 +21,21 @@ export type NuevoUsuario = z.infer<typeof UsuarioSchema>;
  * - campanas (supervisor, coordinador, back office): además, una o más campañas separadas por comas.
  * - asesor: además, una campaña (opcional) y la cédula del empleado, que debe existir y no estar
  *   vinculado a otro usuario.
+ * - cargos (supervisor de área): los cargos que tiene a cargo; ve a esas personas sin acceso a campañas.
  */
-export type GrupoRol = "basico" | "campanas" | "asesor";
+export type GrupoRol = "basico" | "campanas" | "asesor" | "cargos";
 export function grupoDeRol(code: string): GrupoRol {
   const c = code.trim().toLowerCase();
   if (c === "asesor") return "asesor";
   if (["supervisor", "coordinador", "bo"].includes(c)) return "campanas";
+  if (c === "supervisor_area") return "cargos";
   return "basico";
 }
 
 type Rol = { id: string; code: string; name: string };
 type Campana = { id: string; code: string | null; name: string };
 type Catalogos = { roles: Rol[]; campanas: Campana[] };
-type Acceso = { rol: Rol; grupo: GrupoRol; campaignIds: string[]; alcance: string };
+type Acceso = { rol: Rol; grupo: GrupoRol; campaignIds: string[]; alcance: string; cargos: string[] };
 
 const norm = (v: unknown) => String(v ?? "").normalize("NFD").replace(/[\u0300-\u036f]/g, "").trim().toLowerCase();
 const limpiarCedula = (v: string | undefined | null) => (v ?? "").replace(/[.\s]/g, "");
@@ -52,13 +55,23 @@ async function contextoAdmin(context: { supabase: SupabaseClient; userId: string
 }
 
 /** Rol + campañas según las reglas de cada rol. Devuelve el acceso o el motivo del rechazo. */
-function resolverAcceso(cat: Catalogos, esSuper: boolean, rolTexto: string, campanasTexto: string | undefined): Acceso | string {
+function resolverAcceso(
+  cat: Catalogos,
+  esSuper: boolean,
+  rolTexto: string,
+  campanasTexto: string | undefined,
+  cargosPedidos?: string[],
+): Acceso | string {
   const rol = cat.roles.find((r) => norm(r.code) === norm(rolTexto) || norm(r.name) === norm(rolTexto));
   if (!rol) return `El rol «${rolTexto}» no existe.`;
   if (rol.code === "super_admin" && !esSuper) return "Solo un super administrador puede asignar el rol super administrador.";
-  // El supervisor de área necesita sus cargos: se asigna desde la ficha del usuario (Roles), no por carga masiva
-  if (rol.code === "supervisor_area") return "El rol Supervisor de área se asigna desde la ficha del usuario (pestaña Roles), donde se eligen sus cargos.";
   const grupo = grupoDeRol(rol.code);
+  // El supervisor de área necesita sus cargos (en el formulario de creación o en la ficha → Roles)
+  if (grupo === "cargos") {
+    const cargos = [...new Set((cargosPedidos ?? []).map((c) => c.trim().toUpperCase()).filter(Boolean))];
+    if (!cargos.length) return "Elige al menos un cargo para el Supervisor de área (en el formulario o en la ficha del usuario → Roles).";
+    return { rol, grupo, campaignIds: [], alcance: "cargos_asignados", cargos };
+  }
   const pedidas = grupo === "basico" ? [] : listaCampanas(campanasTexto);
   const noEncontradas: string[] = [];
   const campaignIds = pedidas
@@ -75,7 +88,7 @@ function resolverAcceso(cat: Catalogos, esSuper: boolean, rolTexto: string, camp
   const alcance = ["admin", "nomina", "super_admin"].includes(rol.code)
     ? "plataforma"
     : grupo === "basico" ? "mi_empresa" : grupo === "asesor" ? "solo_yo" : campaignIds.length ? "campanas_asignadas" : "solo_yo";
-  return { rol, grupo, campaignIds: [...new Set(campaignIds)], alcance };
+  return { rol, grupo, campaignIds: [...new Set(campaignIds)], alcance, cargos: [] };
 }
 
 /** Empleado al que se vincula un asesor: debe existir y no estar vinculado a otro usuario. */
@@ -101,7 +114,7 @@ export const crearUsuarios = createServerFn({ method: "POST" })
       const fallo = (error: string) => resultados.push({ email: u.email, ok: false, error });
       try {
         // 1. Validar todo antes de crear nada
-        const acceso = resolverAcceso(cat, esSuper, u.rol, u.campanas);
+        const acceso = resolverAcceso(cat, esSuper, u.rol, u.campanas, u.cargos);
         if (typeof acceso === "string") { fallo(acceso); continue; }
         let empleado: { id: string } | null = null;
         if (acceso.grupo === "asesor") {
@@ -133,8 +146,9 @@ export const crearUsuarios = createServerFn({ method: "POST" })
           }
         }
         const { error: eRol } = await admin.from("user_roles").insert({
-          user_id: id, role_id: acceso.rol.id, tenant_id: tenantId, scope: acceso.alcance, campaign_ids: acceso.campaignIds,
-        });
+          user_id: id, role_id: acceso.rol.id, tenant_id: tenantId, scope: acceso.alcance as never, campaign_ids: acceso.campaignIds,
+          cargos: acceso.cargos,
+        } as never);
         if (eRol) { resultados.push({ email: u.email, ok: true, error: `Creado, pero no se asignó el rol: ${eRol.message}` }); continue; }
         resultados.push({ email: u.email, ok: true });
       } catch (err: unknown) {

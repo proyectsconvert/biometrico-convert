@@ -20,6 +20,7 @@ import { Label } from "@/components/ui/label";
 import { Badge } from "@/components/ui/badge";
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+import { SelectorCargos } from "@/components/selector-cargos";
 import { cn } from "@/lib/utils";
 
 type Resultado = { email: string; ok: boolean; error?: string };
@@ -54,6 +55,14 @@ const PLANTILLAS: Record<GrupoRol, { titulo: string; icono: ReactNode; columnas:
       "campana: máximo una, solo informativa. El asesor siempre ve únicamente su propia información.",
     ],
   },
+  cargos: {
+    titulo: "Supervisor de área",
+    icono: <UserCog className="size-5" />,
+    columnas: ["correo", "nombre", "contrasena", "rol", "cargos"],
+    ayuda: [
+      "cargos: los cargos que tiene a cargo, separados por punto y coma (ej: ANALISTA DE CALIDAD; ANALISTA DE CALIDAD (PERIODO DE PRUEBA)). Ve a esas personas en cualquier campaña, sin acceso a las campañas.",
+    ],
+  },
 };
 
 /** Qué pide y cómo se ve cada rol en el formulario. */
@@ -66,6 +75,7 @@ function infoRol(code: string): { icono: ReactNode; detalle: string } {
     case "coordinador": return { icono: <Users className="size-5" />, detalle: "Una o más campañas" };
     case "bo": return { icono: <Briefcase className="size-5" />, detalle: "Una o más campañas" };
     case "asesor": return { icono: <Headphones className="size-5" />, detalle: "Cédula del empleado · máx. 1 campaña" };
+    case "supervisor_area": return { icono: <UserCog className="size-5" />, detalle: "Cargos a cargo (calidad, formación…) · sin campañas" };
     default: return { icono: <UserCog className="size-5" />, detalle: "Rol personalizado · sin campañas" };
   }
 }
@@ -243,6 +253,7 @@ function NuevoUsuarioDialog({ onClose, alTerminar }: { onClose: () => void; alTe
   const [elegidas, setElegidas] = useState<string[]>([]);
   const [buscar, setBuscar] = useState("");
   const [campanaAsesor, setCampanaAsesor] = useState(SIN_CAMPANA);
+  const [cargos, setCargos] = useState<string[]>([]);
   const [error, setError] = useState("");
   const [cargando, setCargando] = useState(false);
 
@@ -253,7 +264,11 @@ function NuevoUsuarioDialog({ onClose, alTerminar }: { onClose: () => void; alTe
   const campanasFiltradas = campanas.filter((c) => norm(c.name).includes(norm(buscar)));
 
   const datosOk = Boolean(f.full_name.trim() && /\S+@\S+\.\S+/.test(f.email) && f.password.length >= 8);
-  const accesoOk = grupo === "basico" || (grupo === "campanas" && elegidas.length > 0) || (grupo === "asesor" && Boolean(empleado.data && !empleado.data.user_id));
+  const accesoOk =
+    grupo === "basico" ||
+    (grupo === "campanas" && elegidas.length > 0) ||
+    (grupo === "cargos" && cargos.length > 0) ||
+    (grupo === "asesor" && Boolean(empleado.data && !empleado.data.user_id));
 
   async function guardar() {
     if (!rol) return;
@@ -268,6 +283,7 @@ function NuevoUsuarioDialog({ onClose, alTerminar }: { onClose: () => void; alTe
           grupo === "campanas" ? elegidas.map(nombreCampana).join(",")
             : grupo === "asesor" && campanaAsesor !== SIN_CAMPANA ? nombreCampana(campanaAsesor) : "",
         documento: grupo === "asesor" ? f.documento : undefined,
+        cargos: grupo === "cargos" ? cargos : undefined,
       };
       const r = await crear({ data: { usuarios: [usuario] } });
       const res = r.resultados[0];
@@ -330,8 +346,14 @@ function NuevoUsuarioDialog({ onClose, alTerminar }: { onClose: () => void; alTe
           </Seccion>
 
           {grupo && grupo !== "basico" ? (
-            <Seccion n={3} titulo={grupo === "asesor" ? "Empleado y campaña" : "Campañas que puede ver"} apagada={!datosOk}>
-              {grupo === "campanas" ? (
+            <Seccion
+              n={3}
+              titulo={grupo === "asesor" ? "Empleado y campaña" : grupo === "cargos" ? "Cargos que tiene a cargo" : "Campañas que puede ver"}
+              apagada={!datosOk}
+            >
+              {grupo === "cargos" ? (
+                <SelectorCargos sel={cargos} onChange={setCargos} />
+              ) : grupo === "campanas" ? (
                 <div className="space-y-2">
                   {elegidas.length ? (
                     <div className="flex flex-wrap gap-1.5">
@@ -388,7 +410,7 @@ function NuevoUsuarioDialog({ onClose, alTerminar }: { onClose: () => void; alTe
 
         <DialogFooter className="gap-2 sm:justify-between">
           <p className="self-center text-xs text-muted-foreground">
-            {rol ? <>Rol <b>{rol.name}</b>{grupo === "campanas" ? ` · ${elegidas.length} campañas` : ""}</> : "Elige un rol para empezar"}
+            {rol ? <>Rol <b>{rol.name}</b>{grupo === "campanas" ? ` · ${elegidas.length} campañas` : grupo === "cargos" ? ` · ${cargos.length} cargos` : ""}</> : "Elige un rol para empezar"}
           </p>
           <div className="flex gap-2">
             <Button variant="outline" onClick={onClose}>Cancelar</Button>
@@ -494,11 +516,14 @@ function CargaMasivaDialog({ onClose, alTerminar }: { onClose: () => void; alTer
         if ((r["contrasena"] ?? "").length < 8) return void errs.push(`Fila ${fila}: la contraseña debe tener al menos 8 caracteres.`);
         if (tipo === "campanas" && !r["campanas"]) return void errs.push(`Fila ${fila}: indica al menos una campaña.`);
         if (tipo === "asesor" && !r["cedula"]) return void errs.push(`Fila ${fila}: falta la cédula del asesor.`);
+        const cargosFila = (r["cargos"] ?? "").split(";").map((c) => c.trim()).filter(Boolean);
+        if (tipo === "cargos" && !cargosFila.length) return void errs.push(`Fila ${fila}: indica al menos un cargo.`);
         correos.add(correo);
         out.push({
           email: correo, full_name: r["nombre"] ?? "", password: r["contrasena"] ?? "", rol: rol.code,
           campanas: tipo === "campanas" ? r["campanas"] : tipo === "asesor" ? r["campana"] : "",
           documento: tipo === "asesor" ? r["cedula"] : undefined,
+          cargos: tipo === "cargos" ? cargosFila : undefined,
         });
       });
       setFilas(out);
