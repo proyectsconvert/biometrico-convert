@@ -234,39 +234,111 @@ export function ConciliacionNovedades({
       return;
     }
     const porId = new Map(aprobadas.map((x) => [x.id, x]));
+    const fmt = (v: number) => String(Math.round(v * 100) / 100).replace(".", ",");
+    const num = (v: string) => Number(v.replace(",", "."));
+
+    // Correcciones de Nómina (historial «horas»): por tipo de hora, lo reportado originalmente y el valor corregido
+    const CAMPO_DE_ETIQUETA: Record<string, string> = {
+      "Nocturnas (0,35)": "horas_nocturnas",
+      "Dominical/festivo (0,90)": "horas_dom_fest_090",
+      "Dominical/festivo (1,90)": "horas_dom_fest_190",
+      "Extras diurnas (1,25)": "horas_extra_diurnas",
+      "Extras nocturnas (1,75)": "horas_extra_nocturnas",
+    };
+    const correcciones = new Map<string, Map<string, { antes: number; despues: number }>>();
+    const ids = aprobadas.map((x) => x.id);
+    for (let k = 0; k < ids.length; k += 150) {
+      const { data: eventos, error: eEv } = await dbAny
+        .from("novelty_review_events")
+        .select("total_id, comentario, created_at")
+        .eq("tipo", "horas")
+        .in("total_id", ids.slice(k, k + 150))
+        .order("created_at");
+      if (eEv) {
+        toast.error("No se pudo leer el historial de correcciones", { description: eEv.message });
+        return;
+      }
+      for (const ev of (eventos ?? []) as { total_id: string | null; comentario: string | null }[]) {
+        if (!ev.total_id) continue;
+        const m = correcciones.get(ev.total_id) ?? new Map<string, { antes: number; despues: number }>();
+        correcciones.set(ev.total_id, m);
+        // «Nocturnas (0,35): 15 h → 10,68 h · Extras diurnas (1,25): 6 h → 2,9 h»; varias correcciones: la primera da lo reportado
+        for (const r of (ev.comentario ?? "").matchAll(/([^.·:]+?):\s*([\d.,]+)\s*h\s*→\s*([\d.,]+)\s*h/g)) {
+          const campo = CAMPO_DE_ETIQUETA[r[1]!.trim()];
+          if (!campo) continue;
+          const previa = m.get(campo);
+          m.set(campo, { antes: previa ? previa.antes : num(r[2]!), despues: num(r[3]!) });
+        }
+      }
+    }
+
     const filasAdecco: (string | number)[][] = [];
-    const reclasificadas: (string | number)[][] = [];
+    const ediciones: (string | number)[][] = [];
     // Tipo de hora de la plantilla → clave de la reclasificación
     const CLAVE: Record<string, keyof HorasAdecco> = { horas_nocturnas: "noct", horas_extra_diurnas: "ed", horas_extra_nocturnas: "en" };
     const NOMBRE: Record<keyof HorasAdecco, string> = { noct: "Recargo Nocturno 35%", ed: "Horas Extras Diurnas 1.25%", en: "Horas Extras Nocturnas 1.75%" };
     for (const t of (data ?? []) as unknown as Record<string, string | number | null>[]) {
       const x = porId.get(String(t["id"]))!;
+      const doc = String(t["document"]);
+      const nombre = x.full_name ?? "";
       const n = (k: string) => Number(t[k] ?? 0);
       // Hora por hora con su recargo correcto según el biométrico (el total no cambia)
       const rep = { noct: n("horas_nocturnas"), ed: n("horas_extra_diurnas"), en: n("horas_extra_nocturnas") };
       const { final, movimientos } = x.hay_biometria ? reclasificarHoras(rep, biometricoReal(x.conceptos)) : { final: rep, movimientos: [] };
-      for (const m of movimientos) reclasificadas.push([String(t["document"]), x.full_name ?? "", NOMBRE[m.de], NOMBRE[m.a], m.horas]);
+      const corr = correcciones.get(String(t["id"]));
       for (const tipo of ADECCO) {
-        const horas = CLAVE[tipo.horas] ? final[CLAVE[tipo.horas]!] : n(tipo.horas);
-        const cantidad = Math.round((horas + n(tipo.ajuste)) * 100) / 100;
-        if (cantidad !== 0) filasAdecco.push([String(t["document"]), tipo.novedad, cantidad, x.campana_empleado ?? x.campaign_label ?? ""]);
+        const clave = CLAVE[tipo.horas];
+        const reportadas = n(tipo.horas); // ya con la corrección de Nómina, si la hubo
+        const horas = clave ? final[clave] : reportadas;
+        const ajuste = n(tipo.ajuste);
+        const cantidad = Math.round((horas + ajuste) * 100) / 100;
+        const c = corr?.get(tipo.horas);
+        const corregida = c && c.antes !== c.despues ? c : null;
+        const original = corregida ? corregida.antes : reportadas;
+        const cambios: string[] = [];
+        if (corregida) {
+          cambios.push(`Nómina corrigió de ${fmt(corregida.antes)} h a ${fmt(corregida.despues)} h`);
+          ediciones.push([doc, nombre, tipo.novedad, "Corrección de Nómina", corregida.antes, corregida.despues, "", `Nómina corrigió las horas reportadas de ${fmt(corregida.antes)} h a ${fmt(corregida.despues)} h`]);
+        }
+        if (clave) {
+          for (const m of movimientos.filter((m) => m.de === clave)) {
+            cambios.push(`${fmt(m.horas)} h pasan a ${NOMBRE[m.a]} (biométrico)`);
+            ediciones.push([doc, nombre, tipo.novedad, "Reclasificación por biométrico", "", "", -m.horas, `${fmt(m.horas)} h reportadas como ${NOMBRE[m.de]} pasan a ${NOMBRE[m.a]}`]);
+          }
+          for (const m of movimientos.filter((m) => m.a === clave)) {
+            cambios.push(`incluye ${fmt(m.horas)} h reclasificadas desde ${NOMBRE[m.de]} (biométrico)`);
+            ediciones.push([doc, nombre, tipo.novedad, "Reclasificación por biométrico", "", "", m.horas, `Recibe ${fmt(m.horas)} h reportadas como ${NOMBRE[m.de]}`]);
+          }
+        }
+        if (ajuste !== 0) {
+          cambios.push(`ajuste ${ajuste > 0 ? "+" : ""}${fmt(ajuste)} h`);
+          ediciones.push([doc, nombre, tipo.novedad, "Ajuste", horas, cantidad, ajuste, `Ajuste de ${ajuste > 0 ? "+" : ""}${fmt(ajuste)} h`]);
+        }
+        const observacion = cambios.length ? `Reportadas ${fmt(original)} h → final ${fmt(cantidad)} h: ${cambios.join("; ")}` : "";
+        // Se deja la fila aunque quede en 0 si tuvo ediciones, para ver el cambio en la misma hoja
+        if (cantidad !== 0 || (observacion && original !== 0))
+          filasAdecco.push([doc, tipo.novedad, cantidad, x.campana_empleado ?? x.campaign_label ?? "", observacion]);
       }
     }
     filasAdecco.sort((a, b) => String(a[0]).localeCompare(String(b[0])) || ADECCO.findIndex((t) => t.novedad === a[1]) - ADECCO.findIndex((t) => t.novedad === b[1]));
     const wb = XLSX.utils.book_new();
-    const ws = XLSX.utils.aoa_to_sheet([["Identificación", "Novedad", "cantidad", "observaciones"], ...filasAdecco]);
-    ws["!cols"] = [{ wch: 16 }, { wch: 42 }, { wch: 10 }, { wch: 28 }];
+    const ws = XLSX.utils.aoa_to_sheet([["Identificación", "Novedad", "cantidad", "observaciones", "Observación edición"], ...filasAdecco]);
+    ws["!cols"] = [{ wch: 16 }, { wch: 42 }, { wch: 10 }, { wch: 28 }, { wch: 90 }];
     XLSX.utils.book_append_sheet(wb, ws, "Adecco");
-    if (reclasificadas.length) {
-      const wr = XLSX.utils.aoa_to_sheet([["Identificación", "Empleado", "Reportadas como", "Pasan a", "Horas"], ...reclasificadas]);
-      wr["!cols"] = [{ wch: 16 }, { wch: 36 }, { wch: 30 }, { wch: 30 }, { wch: 8 }];
+    if (ediciones.length) {
+      const wr = XLSX.utils.aoa_to_sheet([
+        ["Identificación", "Empleado", "Novedad", "Tipo de edición", "Antes (h)", "Después (h)", "Horas movidas / ajuste", "Detalle"],
+        ...ediciones,
+      ]);
+      wr["!cols"] = [{ wch: 16 }, { wch: 36 }, { wch: 38 }, { wch: 30 }, { wch: 10 }, { wch: 11 }, { wch: 12 }, { wch: 70 }];
       XLSX.utils.book_append_sheet(wb, wr, "Reclasificadas");
     }
     XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet([
       ["Novedades aprobadas para Adecco"],
       [`Periodo: ${desde} a ${hasta}`],
-      [`Personas aprobadas: ${aprobadas.length} · Filas: ${filasAdecco.length} · Reclasificaciones: ${reclasificadas.length}`],
-      ["Una fila por persona y tipo de hora (recargo). Cantidad = horas + ajuste de ese tipo de hora."],
+      [`Personas aprobadas: ${aprobadas.length} · Filas: ${filasAdecco.length} · Ediciones: ${ediciones.length}`],
+      ["Una fila por persona y tipo de hora (recargo). «cantidad» es el valor FINAL a pagar (horas corregidas y reclasificadas + ajuste)."],
+      ["«Observación edición»: en blanco si la fila no tuvo cambios; si los tuvo, dice lo reportado, el valor final y por qué cambió (corrección de Nómina, reclasificación por biométrico o ajuste). El detalle de cada edición está en la hoja «Reclasificadas»."],
       ["Si operación reportó las horas en un solo tipo (p. ej. todas nocturnas al 0,35), se pagan tal como se reportaron. Solo cuando reportó dos o más tipos (p. ej. unas al 0,35 y otras al 1,75) se reparten hora por hora en el recargo que les da el biométrico. El total de horas no cambia; lo que el biométrico no puede reclasificar queda como se reportó. Ver la hoja «Reclasificadas»."],
     ]), "Información");
     escribirLibro(wb, `adecco_novedades_${desde}_${hasta}.xlsx`);

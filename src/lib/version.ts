@@ -28,6 +28,7 @@ export const HISTORIAL: EntradaVersion[] = [
       "Rol «Supervisor de área» (calidad, formación, BO…): ve a las personas por su cargo en cualquier campaña, sin acceso a las campañas; se asigna en Usuarios → Roles eligiendo los cargos.",
       "Supervisores y coordinadores: las pantallas cargan mucho más rápido (el alcance de personas se calcula una sola vez).",
       "Archivo Adecco: si operación reporta las horas en un solo tipo (p. ej. todas nocturnas al 0,35) se pagan tal como se reportaron; solo se reparten por el biométrico cuando reporta dos o más tipos.",
+      "Archivo Adecco: la hoja «Adecco» trae el valor final y la columna «Observación edición» (reportado → final y por qué: corrección de Nómina, reclasificación o ajuste); la hoja «Reclasificadas» detalla cada edición.",
       "Asignación de campañas al editar un usuario.",
       "Supervisión y coordinación ven en «Resumen por persona» el cruce con el biométrico (diferencias y detalle por día) que sustenta cada observación.",
       "Conciliación de novedades: solo se comparan las horas reportadas; marcar de más en el biométrico ya no pide revisión.",
