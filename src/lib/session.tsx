@@ -97,7 +97,7 @@ export function SessionProvider({
         if (rp.permissions) permissions.add(`${rp.permissions.module}.${rp.permissions.action}`);
       }
     }
-    const order = ["solo_yo", "mi_campana", "campanas_asignadas", "mi_empresa", "plataforma"];
+    const order = ["solo_yo", "mi_campana", "cargos_asignados", "campanas_asignadas", "mi_empresa", "plataforma"];
     const isAdminOrNomina = isSuperAdmin || roleCodes.includes("admin") || roleCodes.includes("nomina");
     const scope =
       isAdminOrNomina

@@ -49,15 +49,17 @@ type AsignacionRol = {
   user_id: string;
   scope: string;
   campaign_ids: string[] | null;
+  cargos: string[] | null;
   roles: { id: string; name: string; code: string } | null;
 };
 
-type Alcance = "solo_yo" | "mi_campana" | "campanas_asignadas" | "mi_empresa" | "plataforma";
+type Alcance = "solo_yo" | "mi_campana" | "campanas_asignadas" | "cargos_asignados" | "mi_empresa" | "plataforma";
 
 const ALCANCES: { value: Alcance; label: string }[] = [
   { value: "solo_yo", label: "Solo su información" },
   { value: "mi_campana", label: "Su campaña" },
   { value: "campanas_asignadas", label: "Campañas asignadas" },
+  { value: "cargos_asignados", label: "Cargos a cargo (supervisor de área, sin campañas)" },
   { value: "mi_empresa", label: "Toda la empresa" },
   { value: "plataforma", label: "Toda la plataforma" },
 ];
@@ -94,7 +96,7 @@ function Usuarios() {
   const asignaciones = useQuery({
     queryKey: ["asignaciones-rol"],
     queryFn: async () => {
-      const { data, error } = await supabase.from("user_roles").select("id, user_id, scope, campaign_ids, roles(id, name, code)");
+      const { data, error } = await supabase.from("user_roles").select("id, user_id, scope, campaign_ids, cargos, roles(id, name, code)");
       if (error) throw error;
       return (data ?? []) as unknown as AsignacionRol[];
     },
@@ -506,7 +508,9 @@ function RolesUsuario({
   const [rolId, setRolId] = useState("");
   const [scope, setScope] = useState<Alcance>("mi_empresa");
   const [campSel, setCampSel] = useState<string[]>([]);
+  const [cargosSel, setCargosSel] = useState<string[]>([]);
   const [editando, setEditando] = useState<string | null>(null);
+  const porCargos = scope === "cargos_asignados";
   const requiereCampanas = scope === "mi_campana" || scope === "campanas_asignadas";
   const esAsesor = roles.find((r) => r.id === rolId)?.code === "asesor";
   useEffect(() => {
@@ -527,16 +531,18 @@ function RolesUsuario({
     mutationFn: async () => {
       if (!rolId) throw new Error("Selecciona un rol.");
       if (requiereCampanas && !campSel.length) throw new Error("Selecciona al menos una campaña.");
+      if (porCargos && !cargosSel.length) throw new Error("Selecciona al menos un cargo.");
       const { error } = await supabase.from("user_roles").insert({
         user_id: perfil.id,
         role_id: rolId,
         tenant_id: acceso.tenantId,
         scope,
         campaign_ids: requiereCampanas ? campSel : [],
-      });
+        cargos: porCargos ? cargosSel : [],
+      } as never);
       if (error) throw error;
     },
-    onSuccess: () => { toast.success("Rol asignado"); setRolId(""); setCampSel([]); onCambio(); },
+    onSuccess: () => { toast.success("Rol asignado"); setRolId(""); setCampSel([]); setCargosSel([]); onCambio(); },
     onError: (e: Error) => toast.error("No se pudo asignar", { description: e.message }),
   });
 
@@ -562,6 +568,7 @@ function RolesUsuario({
                 <p className="text-xs text-muted-foreground">
                   {ALCANCES.find((x) => x.value === a.scope)?.label ?? a.scope}
                   {a.campaign_ids?.length ? ` · ${a.campaign_ids.map(nombreCampana).join(", ")}` : ""}
+                  {a.cargos?.length ? ` · ${a.cargos.join(", ")}` : ""}
                 </p>
               </div>
               <div className="flex shrink-0">
@@ -569,7 +576,7 @@ function RolesUsuario({
                 <Button
                   variant="ghost"
                   size="icon"
-                  title="Editar alcance y campañas"
+                  title="Editar alcance, campañas o cargos"
                   onClick={() => setEditando((e) => (e === a.id ? null : a.id))}
                 >
                   <Pencil className="size-4" />
@@ -612,6 +619,7 @@ function RolesUsuario({
             if (["admin", "nomina", "super_admin"].includes(c)) setScope("plataforma");
             else if (c === "asesor") setScope("solo_yo"); // el asesor solo ve lo suyo
             else if (["supervisor", "coordinador", "bo"].includes(c)) setScope("campanas_asignadas");
+            else if (c === "supervisor_area") setScope("cargos_asignados");
           }}
         >
           <SelectTrigger><SelectValue placeholder="Selecciona un rol" /></SelectTrigger>
@@ -645,6 +653,7 @@ function RolesUsuario({
             </div>
           </div>
         ) : null}
+        {porCargos ? <SelectorCargos sel={cargosSel} onChange={setCargosSel} /> : null}
         <Button className="w-full" disabled={asignar.isPending || !rolId} onClick={() => asignar.mutate()}>
           <ShieldPlus className="size-4" /> Asignar rol
         </Button>
@@ -671,15 +680,21 @@ function EditarCampanasRol({
   const esAsesor = asignacion.roles?.code === "asesor";
   const [scope, setScope] = useState<Alcance>(asignacion.scope as Alcance);
   const [sel, setSel] = useState<string[]>(asignacion.campaign_ids ?? []);
+  const [cargos, setCargos] = useState<string[]>(asignacion.cargos ?? []);
   const [filtro, setFiltro] = useState("");
   const requiere = scope === "mi_campana" || scope === "campanas_asignadas";
+  const porCargos = scope === "cargos_asignados";
   const visibles = campanas.filter((c) => c.name.toLowerCase().includes(filtro.trim().toLowerCase()));
 
   const guardar = useMutation({
     mutationFn: async () => {
       if (requiere && !sel.length) throw new Error("Selecciona al menos una campaña.");
+      if (porCargos && !cargos.length) throw new Error("Selecciona al menos un cargo.");
       const campaign_ids = requiere ? (esAsesor ? sel.slice(0, 1) : sel) : [];
-      const { error } = await supabase.from("user_roles").update({ scope, campaign_ids }).eq("id", asignacion.id);
+      const { error } = await supabase
+        .from("user_roles")
+        .update({ scope, campaign_ids, cargos: porCargos ? cargos : [] } as never)
+        .eq("id", asignacion.id);
       if (error) throw error;
       // Trazabilidad: antes y después
       await supabase.from("audit_logs").insert({
@@ -688,13 +703,13 @@ function EditarCampanasRol({
         module: "usuarios",
         action: "editar_campanas",
         record_id: asignacion.user_id,
-        old_value: { rol: asignacion.roles?.name ?? null, alcance: asignacion.scope, campanas: asignacion.campaign_ids ?? [] },
-        new_value: { rol: asignacion.roles?.name ?? null, alcance: scope, campanas: campaign_ids },
+        old_value: { rol: asignacion.roles?.name ?? null, alcance: asignacion.scope, campanas: asignacion.campaign_ids ?? [], cargos: asignacion.cargos ?? [] },
+        new_value: { rol: asignacion.roles?.name ?? null, alcance: scope, campanas: campaign_ids, cargos: porCargos ? cargos : [] },
         reason: `Campañas de ${nombreUsuario}`,
       });
     },
     onSuccess: () => {
-      toast.success("Campañas actualizadas", { description: "La persona las verá al volver a cargar la página." });
+      toast.success("Alcance actualizado", { description: "La persona lo verá al volver a cargar la página." });
       onListo();
     },
     onError: (e: Error) => toast.error("No se pudieron guardar las campañas", { description: e.message }),
@@ -735,11 +750,73 @@ function EditarCampanasRol({
           </div>
         </>
       ) : null}
+      {porCargos ? <SelectorCargos sel={cargos} onChange={setCargos} /> : null}
       <div className="flex justify-end gap-2">
         <Button size="sm" variant="outline" onClick={onListo} disabled={guardar.isPending}>Cancelar</Button>
         <Button size="sm" onClick={() => guardar.mutate()} disabled={guardar.isPending}>
-          {guardar.isPending ? <Loader2 className="size-4 animate-spin" /> : null} Guardar campañas
+          {guardar.isPending ? <Loader2 className="size-4 animate-spin" /> : null} Guardar
         </Button>
+      </div>
+    </div>
+  );
+}
+
+/**
+ * Cargos que supervisa un supervisor de área (calidad, formación, BO…): ve a todas las personas con esos
+ * cargos, en cualquier campaña o centro de costo, sin acceso a las campañas.
+ */
+function SelectorCargos({ sel, onChange }: { sel: string[]; onChange: (v: string[]) => void }) {
+  const [filtro, setFiltro] = useState("");
+  const cargos = useQuery({
+    queryKey: ["cargos-empleados"],
+    queryFn: async () => {
+      const { data, error } = await supabase.from("employees").select("position").eq("status", "activo").limit(20000);
+      if (error) throw error;
+      const cuenta = new Map<string, number>();
+      for (const e of (data ?? []) as { position: string | null }[]) {
+        const c = (e.position ?? "").trim().toUpperCase();
+        if (c) cuenta.set(c, (cuenta.get(c) ?? 0) + 1);
+      }
+      return [...cuenta.entries()].map(([cargo, n]) => ({ cargo, n })).sort((a, b) => a.cargo.localeCompare(b.cargo));
+    },
+  });
+  const sinTildes = (t: string) => t.normalize("NFD").replace(/[\u0300-\u036f]/g, "").toLowerCase();
+  const lista = [
+    ...(cargos.data ?? []),
+    ...sel.filter((c) => !(cargos.data ?? []).some((x) => x.cargo === c)).map((cargo) => ({ cargo, n: 0 })),
+  ];
+  const visibles = lista.filter((x) => sinTildes(x.cargo).includes(sinTildes(filtro.trim())));
+  return (
+    <div className="space-y-1">
+      <p className="text-xs text-muted-foreground">
+        Verá a todas las personas con estos cargos, en cualquier campaña o centro de costo, y su propia información. No ve
+        las campañas. Marca también las variantes (p. ej. «(PERIODO DE PRUEBA)»).
+      </p>
+      <div className="flex items-center justify-between gap-2 text-xs text-muted-foreground">
+        <span>{sel.length} cargo(s) seleccionado(s)</span>
+        {filtro.trim() && visibles.length ? (
+          <button type="button" className="text-primary hover:underline" onClick={() => onChange([...new Set([...sel, ...visibles.map((x) => x.cargo)])])}>
+            Marcar los {visibles.length} que coinciden
+          </button>
+        ) : null}
+      </div>
+      <Input value={filtro} onChange={(e) => setFiltro(e.target.value)} placeholder="Buscar cargo (p. ej. calidad, formador)" className="h-8" />
+      <div className="max-h-52 space-y-1 overflow-auto rounded-md border bg-background p-2">
+        {cargos.isLoading ? (
+          <p className="text-xs text-muted-foreground">Cargando cargos…</p>
+        ) : (
+          visibles.map((x) => (
+            <label key={x.cargo} className="flex items-center gap-2 text-sm">
+              <input
+                type="checkbox"
+                checked={sel.includes(x.cargo)}
+                onChange={(e) => onChange(e.target.checked ? [...sel, x.cargo] : sel.filter((c) => c !== x.cargo))}
+              />
+              <span className="flex-1">{x.cargo}</span>
+              <span className="text-xs tabular-nums text-muted-foreground">{x.n}</span>
+            </label>
+          ))
+        )}
       </div>
     </div>
   );

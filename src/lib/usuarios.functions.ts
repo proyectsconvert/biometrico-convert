@@ -56,6 +56,8 @@ function resolverAcceso(cat: Catalogos, esSuper: boolean, rolTexto: string, camp
   const rol = cat.roles.find((r) => norm(r.code) === norm(rolTexto) || norm(r.name) === norm(rolTexto));
   if (!rol) return `El rol «${rolTexto}» no existe.`;
   if (rol.code === "super_admin" && !esSuper) return "Solo un super administrador puede asignar el rol super administrador.";
+  // El supervisor de área necesita sus cargos: se asigna desde la ficha del usuario (Roles), no por carga masiva
+  if (rol.code === "supervisor_area") return "El rol Supervisor de área se asigna desde la ficha del usuario (pestaña Roles), donde se eligen sus cargos.";
   const grupo = grupoDeRol(rol.code);
   const pedidas = grupo === "basico" ? [] : listaCampanas(campanasTexto);
   const noEncontradas: string[] = [];

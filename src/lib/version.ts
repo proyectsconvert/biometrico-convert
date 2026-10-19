@@ -25,6 +25,8 @@ export const HISTORIAL: EntradaVersion[] = [
       "Zumbidos de turno (estilo Messenger): ventana emergente con sonido y sacudida para la persona, automática al pasar su tiempo máximo (minutos configurables) y repetida hasta que finalice; también enviados por supervisión, coordinación, Nómina o Administración, uno a uno o masivos.",
       "Panel de alarmas de «Inicio turno» con filtros por estado, categoría y persona, orden por gravedad o recientes y desplazamiento.",
       "La ubicación se toma solo al iniciar y al finalizar el turno; si está apagada o bloqueada, se explica cómo activarla y se vuelve a pedir hasta tenerla.",
+      "Rol «Supervisor de área» (calidad, formación, BO…): ve a las personas por su cargo en cualquier campaña, sin acceso a las campañas; se asigna en Usuarios → Roles eligiendo los cargos.",
+      "Supervisores y coordinadores: las pantallas cargan mucho más rápido (el alcance de personas se calcula una sola vez).",
       "Asignación de campañas al editar un usuario.",
       "Supervisión y coordinación ven en «Resumen por persona» el cruce con el biométrico (diferencias y detalle por día) que sustenta cada observación.",
       "Conciliación de novedades: solo se comparan las horas reportadas; marcar de más en el biométrico ya no pide revisión.",
