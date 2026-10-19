@@ -267,7 +267,7 @@ export function ConciliacionNovedades({
       [`Periodo: ${desde} a ${hasta}`],
       [`Personas aprobadas: ${aprobadas.length} · Filas: ${filasAdecco.length} · Reclasificaciones: ${reclasificadas.length}`],
       ["Una fila por persona y tipo de hora (recargo). Cantidad = horas + ajuste de ese tipo de hora."],
-      ["Las horas reportadas se reparten hora por hora en el recargo que les da el biométrico: si se reportaron como nocturnas (0,35) o extras diurnas (1,25) horas que fueron extras nocturnas, van en 1,75, y al revés. El total de horas no cambia; lo que el biométrico no puede reclasificar queda como se reportó. Ver la hoja «Reclasificadas»."],
+      ["Si operación reportó las horas en un solo tipo (p. ej. todas nocturnas al 0,35), se pagan tal como se reportaron. Solo cuando reportó dos o más tipos (p. ej. unas al 0,35 y otras al 1,75) se reparten hora por hora en el recargo que les da el biométrico. El total de horas no cambia; lo que el biométrico no puede reclasificar queda como se reportó. Ver la hoja «Reclasificadas»."],
     ]), "Información");
     escribirLibro(wb, `adecco_novedades_${desde}_${hasta}.xlsx`);
     toast.success(`${filasAdecco.length} filas de ${aprobadas.length} personas aprobadas`);

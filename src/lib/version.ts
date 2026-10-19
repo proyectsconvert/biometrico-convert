@@ -27,6 +27,7 @@ export const HISTORIAL: EntradaVersion[] = [
       "La ubicación se toma solo al iniciar y al finalizar el turno; si está apagada o bloqueada, se explica cómo activarla y se vuelve a pedir hasta tenerla.",
       "Rol «Supervisor de área» (calidad, formación, BO…): ve a las personas por su cargo en cualquier campaña, sin acceso a las campañas; se asigna en Usuarios → Roles eligiendo los cargos.",
       "Supervisores y coordinadores: las pantallas cargan mucho más rápido (el alcance de personas se calcula una sola vez).",
+      "Archivo Adecco: si operación reporta las horas en un solo tipo (p. ej. todas nocturnas al 0,35) se pagan tal como se reportaron; solo se reparten por el biométrico cuando reporta dos o más tipos.",
       "Asignación de campañas al editar un usuario.",
       "Supervisión y coordinación ven en «Resumen por persona» el cruce con el biométrico (diferencias y detalle por día) que sustenta cada observación.",
       "Conciliación de novedades: solo se comparan las horas reportadas; marcar de más en el biométrico ya no pide revisión.",

@@ -88,9 +88,13 @@ export function biometricoReal(conceptos: ConceptoConciliacion[]): HorasAdecco {
  *    diurnas → 0,35 o 1,25;
  * 3. lo que el biométrico no puede reclasificar se queda como se reportó (Nómina ya lo aprobó).
  * El total de horas nunca cambia.
+ * Solo se reparte cuando operación reportó DOS o más tipos de hora (p. ej. unas al 0,35 y otras al 1,75).
+ * Si las reportó todas en un solo tipo (p. ej. 13 h nocturnas al 0,35), se pagan tal como se reportaron.
  */
 export function reclasificarHoras(rep: HorasAdecco, bio: HorasAdecco) {
   const r2 = (v: number) => Math.round(v * 100) / 100;
+  const tiposReportados = [rep.noct, rep.ed, rep.en].filter((h) => h > 0).length;
+  if (tiposReportados < 2) return { final: { ...rep }, movimientos: [] as Movimiento[] };
   const queda = { noct: Math.min(rep.noct, bio.noct), ed: Math.min(rep.ed, bio.ed), en: Math.min(rep.en, bio.en) };
   const sobra = { noct: rep.noct - queda.noct, ed: rep.ed - queda.ed, en: rep.en - queda.en };
   const libre = { noct: bio.noct - queda.noct, ed: bio.ed - queda.ed, en: bio.en - queda.en };
